@@ -211,11 +211,8 @@ const Products: React.FC = () => {
                 });
             }
             
-            // Refresh data to show latest changes
-            await fetchData();
-            
-            setShowAddModal(false);
-            setEditingProduct(null);
+            // Don't close modal automatically - let user close it manually
+            // Data will be refreshed when modal is closed
         } catch (err: any) {
             alert(`Hata: ${err.message}`);
         }
@@ -646,7 +643,9 @@ const Products: React.FC = () => {
                     proformaGroups={proformaGroups}
                     groupsLoading={groupsLoading}
                     onSave={handleSaveProduct}
-          onClose={() => {
+          onClose={async () => {
+            // Refresh data when modal is closed
+            await fetchData();
             setShowAddModal(false);
             setEditingProduct(null);
           }}
