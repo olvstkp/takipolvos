@@ -148,7 +148,7 @@ const Products: React.FC = () => {
                         price_per_piece_usd: productData.price_per_piece_usd,
                         barcode: productData.barcode,
                         is_active: productData.is_active,
-                        proforma_group_id: productData.proforma_group_id
+                        proforma_group_id: productData.proforma_group_id || null
                     })
                     .eq('id', editingProduct.id);
 
@@ -167,7 +167,7 @@ const Products: React.FC = () => {
                         price_per_piece_usd: productData.price_per_piece_usd,
                         barcode: productData.barcode,
                         is_active: productData.is_active,
-                        proforma_group_id: productData.proforma_group_id
+                        proforma_group_id: productData.proforma_group_id || null
                     })
                     .select('id')
                     .single();

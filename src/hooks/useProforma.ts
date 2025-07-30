@@ -351,18 +351,8 @@ export const useProformaGroups = () => {
 
             if (supabaseError) {
                 console.error('Supabase error:', supabaseError);
-                // Fallback to mock data
-                const mockProformaGroups = [
-                    { id: 'pg_1', name: 'OLIVE OIL SHOWER GEL 750ML', display_name: 'Sıvı Sabun 750ML', group_type: 'SHOWER GEL', size_value: 750, size_unit: 'ML', is_liquid: true, sort_order: 1 },
-                    { id: 'pg_2', name: 'OLIVE OIL SHOWER GEL 500ML', display_name: 'Sıvı Sabun 500ML', group_type: 'SHOWER GEL', size_value: 500, size_unit: 'ML', is_liquid: true, sort_order: 2 },
-                    { id: 'pg_3', name: 'OLIVE OIL SHOWER GEL 1000ML', display_name: 'Sıvı Sabun 1000ML', group_type: 'SHOWER GEL', size_value: 1000, size_unit: 'ML', is_liquid: true, sort_order: 3 },
-                    { id: 'pg_4', name: 'OLIVE OIL SOAP 150G', display_name: 'Katı Sabun 150G', group_type: 'SOAP', size_value: 150, size_unit: 'G', is_liquid: false, sort_order: 4 },
-                    { id: 'pg_5', name: 'OLIVE OIL SOAP 100G', display_name: 'Katı Sabun 100G', group_type: 'SOAP', size_value: 100, size_unit: 'G', is_liquid: false, sort_order: 5 },
-                    { id: 'pg_6', name: 'OLIVE OIL BODY LOTION 250ML', display_name: 'Vücut Losyonu 250ML', group_type: 'BODY LOTION', size_value: 250, size_unit: 'ML', is_liquid: true, sort_order: 6 },
-                    { id: 'pg_7', name: 'OLIVE OIL SHAMPOO 500ML', display_name: 'Şampuan 500ML', group_type: 'SHAMPOO', size_value: 500, size_unit: 'ML', is_liquid: true, sort_order: 7 },
-                    { id: 'pg_8', name: 'OLIVE OIL CONDITIONER 500ML', display_name: 'Saç Kremi 500ML', group_type: 'CONDITIONER', size_value: 500, size_unit: 'ML', is_liquid: true, sort_order: 8 }
-                ];
-                setProformaGroups(mockProformaGroups);
+                setError(supabaseError.message);
+                setProformaGroups([]);
             } else {
                 console.log('✅ Supabase proforma groups loaded:', data);
                 setProformaGroups(data || []);
@@ -370,18 +360,7 @@ export const useProformaGroups = () => {
         } catch (err: any) {
             console.error('Error fetching proforma groups:', err);
             setError(err.message);
-            // Fallback to mock data
-            const mockProformaGroups = [
-                { id: 'pg_1', name: 'OLIVE OIL SHOWER GEL 750ML', display_name: 'Sıvı Sabun 750ML', group_type: 'SHOWER GEL', size_value: 750, size_unit: 'ML', is_liquid: true, sort_order: 1 },
-                { id: 'pg_2', name: 'OLIVE OIL SHOWER GEL 500ML', display_name: 'Sıvı Sabun 500ML', group_type: 'SHOWER GEL', size_value: 500, size_unit: 'ML', is_liquid: true, sort_order: 2 },
-                { id: 'pg_3', name: 'OLIVE OIL SHOWER GEL 1000ML', display_name: 'Sıvı Sabun 1000ML', group_type: 'SHOWER GEL', size_value: 1000, size_unit: 'ML', is_liquid: true, sort_order: 3 },
-                { id: 'pg_4', name: 'OLIVE OIL SOAP 150G', display_name: 'Katı Sabun 150G', group_type: 'SOAP', size_value: 150, size_unit: 'G', is_liquid: false, sort_order: 4 },
-                { id: 'pg_5', name: 'OLIVE OIL SOAP 100G', display_name: 'Katı Sabun 100G', group_type: 'SOAP', size_value: 100, size_unit: 'G', is_liquid: false, sort_order: 5 },
-                { id: 'pg_6', name: 'OLIVE OIL BODY LOTION 250ML', display_name: 'Vücut Losyonu 250ML', group_type: 'BODY LOTION', size_value: 250, size_unit: 'ML', is_liquid: true, sort_order: 6 },
-                { id: 'pg_7', name: 'OLIVE OIL SHAMPOO 500ML', display_name: 'Şampuan 500ML', group_type: 'SHAMPOO', size_value: 500, size_unit: 'ML', is_liquid: true, sort_order: 7 },
-                { id: 'pg_8', name: 'OLIVE OIL CONDITIONER 500ML', display_name: 'Saç Kremi 500ML', group_type: 'CONDITIONER', size_value: 500, size_unit: 'ML', is_liquid: true, sort_order: 8 }
-            ];
-            setProformaGroups(mockProformaGroups);
+            setProformaGroups([]);
         } finally {
             setLoading(false);
         }
@@ -406,14 +385,7 @@ export const useProformaGroups = () => {
 
             if (error) {
                 console.error('Supabase error adding group:', error);
-                // Fallback to local state
-                const newGroup = {
-                    id: `pg_${Date.now()}`,
-                    ...groupData,
-                    sort_order: proformaGroups.length + 1
-                };
-                setProformaGroups([...proformaGroups, newGroup]);
-                return newGroup;
+                throw error;
             }
 
             // Refresh list
