@@ -43,8 +43,11 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   ];
 
   const isActive = (path: string) => {
-    if (path === '/' && location.pathname === '/') return true;
-    if (path !== '/' && location.pathname.startsWith(path)) return true;
+    // Remove base path if exists
+    const currentPath = location.pathname.replace(/^\/takipolvos/, '') || '/';
+    
+    if (path === '/' && (currentPath === '/' || currentPath === '')) return true;
+    if (path !== '/' && currentPath.startsWith(path)) return true;
     return false;
   };
 
