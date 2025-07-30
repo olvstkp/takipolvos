@@ -198,14 +198,47 @@ const Products: React.FC = () => {
                 console.log('⚠️ No group assignment to save:', { productId, groupId: productData.proforma_group_id });
             }
 
-            // Refresh data and force re-render to show localStorage changes
-            await fetchData();
+            // Show success toast
+            if (editingProduct) {
+                toast.success('Ürün başarıyla güncellendi!', {
+                    duration: 3000,
+                    position: 'top-right',
+                });
+            } else {
+                toast.success('Ürün başarıyla eklendi!', {
+                    duration: 3000,
+                    position: 'top-right',
+                });
+            }
             
-            // Force a small delay to ensure localStorage changes are reflected
-            setTimeout(() => {
-                console.log('🔄 Force refreshing product list...');
-                fetchData();
-            }, 100);
+            // Update local state instead of refetching
+            if (editingProduct) {
+                // Update existing product in local state
+                setProducts(prevProducts => 
+                    prevProducts.map(p => 
+                        p.id === editingProduct.id 
+                            ? { ...p, ...productData }
+                            : p
+                    )
+                );
+            } else if (productId) {
+                // Add new product to local state
+                const newProduct: Product = {
+                    id: productId,
+                    name: productData.name || '',
+                    series_id: productData.series_id || '',
+                    price_per_case: productData.price_per_case || 0,
+                    price_per_piece: productData.price_per_piece || 0,
+                    price_per_case_usd: productData.price_per_case_usd || 0,
+                    price_per_piece_usd: productData.price_per_piece_usd || 0,
+                    barcode: productData.barcode || '',
+                    is_active: productData.is_active ?? true,
+                    created_at: new Date().toISOString(),
+                    proforma_group_id: productData.proforma_group_id || undefined,
+                    series: series.find(s => s.id === productData.series_id)
+                };
+                setProducts(prevProducts => [newProduct, ...prevProducts]);
+            }
             
             setShowAddModal(false);
             setEditingProduct(null);
@@ -231,8 +264,19 @@ const Products: React.FC = () => {
 
             if (error) throw error;
             
-            toast.success(`"${deleteConfirmation.product.name}" başarıyla silindi!`);
-            await fetchData();
+            toast.success(`"${deleteConfirmation.product.name}" başarıyla silindi!`, {
+                duration: 3000,
+                position: 'top-right',
+            });
+            
+            // Update local state instead of refetching
+            setProducts(prevProducts => 
+                prevProducts.map(p => 
+                    p.id === deleteConfirmation.product!.id 
+                        ? { ...p, is_active: false }
+                        : p
+                )
+            );
             setDeleteConfirmation({show: false, product: null});
         } catch (err: any) {
             toast.error(`Hata: ${err.message}`);
@@ -277,8 +321,19 @@ const Products: React.FC = () => {
 
             if (error) throw error;
             
-            toast.success(`${selectedProducts.length} ürün başarıyla silindi!`);
-            await fetchData();
+            toast.success(`${selectedProducts.length} ürün başarıyla silindi!`, {
+                duration: 3000,
+                position: 'top-right',
+            });
+            
+            // Update local state instead of refetching
+            setProducts(prevProducts => 
+                prevProducts.map(p => 
+                    selectedProducts.includes(p.id)
+                        ? { ...p, is_active: false }
+                        : p
+                )
+            );
             setSelectedProducts([]);
             setShowBulkDeleteConfirm(false);
         } catch (err: any) {
