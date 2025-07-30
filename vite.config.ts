@@ -15,7 +15,7 @@ export default defineConfig({
   },
   build: {
     rollupOptions: {
-      external: [],
+      external: ['react-is'],
       output: {
         manualChunks: undefined,
       },
