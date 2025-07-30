@@ -1,634 +1,422 @@
-import React, { useState, useRef } from 'react';
-import { Search, Plus, Edit, Trash2, Upload, Download, FileSpreadsheet, X, Check, AlertCircle } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Search, Plus, Edit, Trash2, Save, X, Package, DollarSign, Tag, Box, Upload } from 'lucide-react';
+import { supabase } from '../lib/supabase';
+import { useProductTypes, useProformaGroups } from '../hooks/useProforma';
+import toast from 'react-hot-toast';
+import ProductImport from '../components/ProductImport';
+
+interface Series {
+  id: string;
+  name: string;
+    pieces_per_case: number;
+    net_weight_kg_per_piece: number;
+    packaging_weight_kg_per_case: number;
+    description?: string;
+    is_active: boolean;
+}
+
+interface ProductType {
+    id: string;
+  name: string;
+    packing_list_name: string;
+    is_liquid: boolean;
+}
+
+interface ProformaGroup {
+    id: string;
+    name: string;
+    display_name: string;
+    group_type: string;
+    size_value?: number;
+    size_unit?: string;
+    is_liquid: boolean;
+    sort_order: number;
+}
 
 interface Product {
   id: string;
-  code: string;
   name: string;
-  category: string;
-  weight: number;
-  price: number;
-  currency: string;
-  description: string;
-  isActive: boolean;
-  createdDate: string;
-  lastUpdated: string;
-}
-
-interface ExcelColumn {
-  key: string;
-  name: string;
-  type: 'text' | 'number' | 'boolean' | 'date';
-}
-
-interface ColumnMapping {
-  excelColumn: string;
-  productField: string;
-  fieldName: string;
+    series_id: string;
+    price_per_case: number;
+    price_per_piece: number;
+    price_per_case_usd?: number;
+    price_per_piece_usd?: number;
+    barcode?: string;
+    is_active: boolean;
+    created_at: string;
+    series?: Series;
+    proforma_group_id?: string;
+    product_type_id?: string;
+    size_value?: number;
+    size_unit?: string;
+    product_type?: ProductType;
+    proforma_group?: ProformaGroup;
 }
 
 const Products: React.FC = () => {
+    const [products, setProducts] = useState<Product[]>([]);
+    const [series, setSeries] = useState<Series[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+    const { productTypes } = useProductTypes();
+    const { proformaGroups, loading: groupsLoading, setProductGroupAssignment } = useProformaGroups();
+    const [selectedCurrency, setSelectedCurrency] = useState<'EUR' | 'USD'>('EUR');
+    
+    // Debug: Proforma groups yüklendiğinde console'a yazdır
+    useEffect(() => {
+        console.log('📋 Products component - proformaGroups:', proformaGroups);
+        console.log('📋 Products component - groupsLoading:', groupsLoading);
+    }, [proformaGroups, groupsLoading]);
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('all');
+    const [selectedSeries, setSelectedSeries] = useState<string>('all');
   const [showAddModal, setShowAddModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState<{show: boolean, product: Product | null}>({show: false, product: null});
+  const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
+  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
 
-  // Excel import states
-  const [excelData, setExcelData] = useState<any[]>([]);
-  const [excelColumns, setExcelColumns] = useState<string[]>([]);
-  const [columnMappings, setColumnMappings] = useState<ColumnMapping[]>([]);
-  const [importStep, setImportStep] = useState<'upload' | 'mapping' | 'preview' | 'complete'>('upload');
+    // Fetch products and series
+    const fetchData = async () => {
+        try {
+            setLoading(true);
+            
+            // Fetch series
+            const { data: seriesData, error: seriesError } = await supabase
+                .from('series')
+                .select('*')
+                .eq('is_active', true)
+                .order('name');
 
-  const categories = ['Katı Sabun', 'Sıvı Sabun', 'Özel Ürünler', 'Organik Ürünler'];
+            if (seriesError) throw seriesError;
+            setSeries(seriesData || []);
 
-  const productFields: ExcelColumn[] = [
-    { key: 'code', name: 'Ürün Kodu', type: 'text' },
-    { key: 'name', name: 'Ürün Adı', type: 'text' },
-    { key: 'category', name: 'Kategori', type: 'text' },
-    { key: 'weight', name: 'Ağırlık (g)', type: 'number' },
-    { key: 'price', name: 'Fiyat', type: 'number' },
-    { key: 'currency', name: 'Para Birimi', type: 'text' },
-    { key: 'description', name: 'Açıklama', type: 'text' },
-    { key: 'isActive', name: 'Aktif', type: 'boolean' }
-  ];
+            // Fetch products with series
+            const { data: productsData, error: productsError } = await supabase
+                .from('products')
+                .select(`
+                    *,
+                    series (
+                        id,
+                        name,
+                        pieces_per_case,
+                        net_weight_kg_per_piece,
+                        packaging_weight_kg_per_case,
+                        description,
+                        is_active
+                    )
+                `)
+                .eq('is_active', true)
+                .order('name');
 
-  const [products, setProducts] = useState<Product[]>([
-    {
-      id: '1',
-      code: 'ZKS-180',
-      name: 'Zeytinyağlı Kastil Sabunu 180g',
-      category: 'Katı Sabun',
-      weight: 180,
-      price: 1.81,
-      currency: 'USD',
-      description: 'Doğal zeytinyağından yapılan geleneksel kastil sabun',
-      isActive: true,
-      createdDate: '2024-01-15',
-      lastUpdated: '2024-01-15'
-    },
-    {
-      id: '2',
-      code: 'LVT-180',
-      name: 'Lavanta Sabunu 180g',
-      category: 'Katı Sabun',
-      weight: 180,
-      price: 2.25,
-      currency: 'USD',
-      description: 'Lavanta yağı ile zenginleştirilmiş doğal sabun',
-      isActive: true,
-      createdDate: '2024-01-14',
-      lastUpdated: '2024-01-14'
-    },
-    {
-      id: '3',
-      code: 'SES-5L',
-      name: 'Sıvı El Sabunu 5L',
-      category: 'Sıvı Sabun',
-      weight: 5000,
-      price: 19.75,
-      currency: 'USD',
-      description: 'Günlük kullanım için sıvı el sabunu',
-      isActive: true,
-      createdDate: '2024-01-13',
-      lastUpdated: '2024-01-13'
-    }
-  ]);
+            if (productsError) throw productsError;
+            setProducts(productsData || []);
+        } catch (err: any) {
+            setError(err.message);
+        } finally {
+            setLoading(false);
+        }
+    };
 
+    useEffect(() => {
+        fetchData();
+    }, []);
+
+    // Filtered products
   const filteredProducts = products.filter(product => {
     const matchesSearch = product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         product.code.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesCategory = selectedCategory === 'all' || product.category === selectedCategory;
-    return matchesSearch && matchesCategory;
+                             (product.barcode && product.barcode.toLowerCase().includes(searchTerm.toLowerCase()));
+        const matchesSeries = selectedSeries === 'all' || product.series_id === selectedSeries;
+        return matchesSearch && matchesSeries;
   });
 
-  // Excel file handling
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
+    // Add/Update product
+    const handleSaveProduct = async (productData: Partial<Product>) => {
+        try {
+            let productId = editingProduct?.id;
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const text = e.target?.result as string;
-        const lines = text.split('\n');
-        const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
-        const data = lines.slice(1).map(line => {
-          const values = line.split(',').map(v => v.trim().replace(/"/g, ''));
-          const row: any = {};
-          headers.forEach((header, index) => {
-            row[header] = values[index] || '';
-          });
-          return row;
-        }).filter(row => Object.values(row).some(val => val !== ''));
+            if (editingProduct) {
+                // Update existing product
+                const { error } = await supabase
+                    .from('products')
+                    .update({
+                        name: productData.name,
+                        series_id: productData.series_id,
+                        price_per_case: productData.price_per_case,
+                        price_per_piece: productData.price_per_piece,
+                        price_per_case_usd: productData.price_per_case_usd,
+                        price_per_piece_usd: productData.price_per_piece_usd,
+                        barcode: productData.barcode,
+                        is_active: productData.is_active,
+                        proforma_group_id: productData.proforma_group_id
+                    })
+                    .eq('id', editingProduct.id);
 
-        setExcelColumns(headers);
-        setExcelData(data);
-        setImportStep('mapping');
-        
-        // Initialize column mappings
-        const initialMappings: ColumnMapping[] = productFields.map(field => ({
-          excelColumn: '',
-          productField: field.key,
-          fieldName: field.name
-        }));
-        setColumnMappings(initialMappings);
-      } catch (error) {
-        alert('Excel dosyası okunurken hata oluştu. Lütfen CSV formatında kaydettiğinizden emin olun.');
-      }
-    };
-    reader.readAsText(file);
-  };
+                if (error) throw error;
+                productId = editingProduct.id;
+            } else {
+                // Add new product
+                const { data, error } = await supabase
+                    .from('products')
+                    .insert({
+                        name: productData.name,
+                        series_id: productData.series_id,
+                        price_per_case: productData.price_per_case,
+                        price_per_piece: productData.price_per_piece,
+                        price_per_case_usd: productData.price_per_case_usd,
+                        price_per_piece_usd: productData.price_per_piece_usd,
+                        barcode: productData.barcode,
+                        is_active: productData.is_active,
+                        proforma_group_id: productData.proforma_group_id
+                    })
+                    .select('id')
+                    .single();
 
-  const updateColumnMapping = (productField: string, excelColumn: string) => {
-    setColumnMappings(prev => prev.map(mapping => 
-      mapping.productField === productField 
-        ? { ...mapping, excelColumn }
-        : mapping
-    ));
-  };
+                if (error) throw error;
+                productId = data?.id;
+            }
 
-  const processImport = () => {
-    const newProducts: Product[] = excelData.map((row, index) => {
-      const product: any = {
-        id: Date.now().toString() + index,
-        createdDate: new Date().toISOString().split('T')[0],
-        lastUpdated: new Date().toISOString().split('T')[0]
-      };
+            // Save proforma group assignment to both Supabase and localStorage
+            console.log('💾 Saving group assignment:', { productId, groupId: productData.proforma_group_id });
+            if (productId && productData.proforma_group_id) {
+                // Update Supabase
+                const { error: updateError } = await supabase
+                    .from('products')
+                    .update({ proforma_group_id: productData.proforma_group_id })
+                    .eq('id', productId);
 
-      columnMappings.forEach(mapping => {
-        if (mapping.excelColumn && row[mapping.excelColumn] !== undefined) {
-          const value = row[mapping.excelColumn];
-          
-          if (mapping.productField === 'weight' || mapping.productField === 'price') {
-            product[mapping.productField] = parseFloat(value) || 0;
-          } else if (mapping.productField === 'isActive') {
-            product[mapping.productField] = value.toLowerCase() === 'true' || value === '1' || value.toLowerCase() === 'aktif';
+                if (updateError) {
+                    console.error('❌ Supabase update error:', updateError);
+                    // Fallback to localStorage only
+                    setProductGroupAssignment(productId, productData.proforma_group_id);
           } else {
-            product[mapping.productField] = value;
-          }
+                    console.log('✅ Group assignment saved to Supabase');
+                    // Also save to localStorage for consistency
+                    setProductGroupAssignment(productId, productData.proforma_group_id);
+                }
+            } else {
+                console.log('⚠️ No group assignment to save:', { productId, groupId: productData.proforma_group_id });
+            }
+
+            // Refresh data and force re-render to show localStorage changes
+            await fetchData();
+            
+            // Force a small delay to ensure localStorage changes are reflected
+            setTimeout(() => {
+                console.log('🔄 Force refreshing product list...');
+                fetchData();
+            }, 100);
+            
+            setShowAddModal(false);
+            setEditingProduct(null);
+        } catch (err: any) {
+            alert(`Hata: ${err.message}`);
         }
-      });
-
-      // Set defaults for required fields
-      if (!product.code) product.code = `PRD-${Date.now()}-${index}`;
-      if (!product.name) product.name = 'İsimsiz Ürün';
-      if (!product.category) product.category = 'Katı Sabun';
-      if (!product.currency) product.currency = 'USD';
-      if (product.isActive === undefined) product.isActive = true;
-
-      return product as Product;
-    });
-
-    setProducts(prev => [...prev, ...newProducts]);
-    setImportStep('complete');
-  };
-
-  const exportToExcel = () => {
-    const headers = ['Ürün Kodu', 'Ürün Adı', 'Kategori', 'Ağırlık (g)', 'Fiyat', 'Para Birimi', 'Açıklama', 'Aktif', 'Oluşturulma Tarihi'];
-    
-    // UTF-8 BOM ekleyerek Türkçe karakter desteği sağlıyoruz
-    const csvContent = [
-      headers.join(','),
-      ...products.map(product => [
-        product.code,
-        `"${product.name}"`,
-        product.category,
-        product.weight,
-        product.price,
-        product.currency,
-        `"${product.description}"`,
-        product.isActive ? 'Aktif' : 'Pasif',
-        product.createdDate
-      ].join(','))
-    ].join('\n');
-
-    // UTF-8 BOM ekliyoruz (Excel'in Türkçe karakterleri doğru okuması için)
-    const BOM = '\uFEFF';
-    const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    const url = URL.createObjectURL(blob);
-    link.setAttribute('href', url);
-    link.setAttribute('download', `urunler_${new Date().toISOString().split('T')[0]}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  const ProductForm: React.FC<{ product?: Product; onClose: () => void }> = ({ product, onClose }) => {
-    const [formData, setFormData] = useState({
-      code: product?.code || '',
-      name: product?.name || '',
-      category: product?.category || 'Katı Sabun',
-      weight: product?.weight || 0,
-      price: product?.price || 0,
-      currency: product?.currency || 'USD',
-      description: product?.description || '',
-      isActive: product?.isActive ?? true
-    });
-
-    const handleSubmit = (e: React.FormEvent) => {
-      e.preventDefault();
-      if (product) {
-        setProducts(prev => prev.map(p => 
-          p.id === product.id 
-            ? { ...p, ...formData, lastUpdated: new Date().toISOString().split('T')[0] }
-            : p
-        ));
-      } else {
-        const newProduct: Product = {
-          id: Date.now().toString(),
-          ...formData,
-          createdDate: new Date().toISOString().split('T')[0],
-          lastUpdated: new Date().toISOString().split('T')[0]
-        };
-        setProducts(prev => [...prev, newProduct]);
-      }
-      onClose();
     };
 
+    // Delete product - show confirmation dialog
+    const handleDeleteClick = (product: Product) => {
+        setDeleteConfirmation({show: true, product});
+    };
+
+    // Confirm delete product
+    const handleConfirmDelete = async () => {
+        if (!deleteConfirmation.product) return;
+
+        try {
+            const { error } = await supabase
+                .from('products')
+                .update({ is_active: false })
+                .eq('id', deleteConfirmation.product.id);
+
+            if (error) throw error;
+            
+            toast.success(`"${deleteConfirmation.product.name}" başarıyla silindi!`);
+            await fetchData();
+            setDeleteConfirmation({show: false, product: null});
+        } catch (err: any) {
+            toast.error(`Hata: ${err.message}`);
+        }
+    };
+
+    // Cancel delete
+    const handleCancelDelete = () => {
+        setDeleteConfirmation({show: false, product: null});
+    };
+
+    // Ürün seçimi fonksiyonları
+    const handleSelectProduct = (productId: string) => {
+        setSelectedProducts(prev => 
+            prev.includes(productId) 
+                ? prev.filter(id => id !== productId)
+                : [...prev, productId]
+        );
+    };
+
+    const handleSelectAll = () => {
+        if (selectedProducts.length === filteredProducts.length) {
+            setSelectedProducts([]);
+        } else {
+            setSelectedProducts(filteredProducts.map(p => p.id));
+        }
+    };
+
+    // Toplu silme fonksiyonları
+    const handleBulkDelete = () => {
+        if (selectedProducts.length > 0) {
+            setShowBulkDeleteConfirm(true);
+        }
+    };
+
+    const handleConfirmBulkDelete = async () => {
+        try {
+            const { error } = await supabase
+                .from('products')
+                .update({ is_active: false })
+                .in('id', selectedProducts);
+
+            if (error) throw error;
+            
+            toast.success(`${selectedProducts.length} ürün başarıyla silindi!`);
+            await fetchData();
+            setSelectedProducts([]);
+            setShowBulkDeleteConfirm(false);
+        } catch (err: any) {
+            toast.error(`Hata: ${err.message}`);
+        }
+    };
+
+    const handleCancelBulkDelete = () => {
+        setShowBulkDeleteConfirm(false);
+    };
+
+    // Excel import handler
+    const handleImportComplete = async (importedProducts: any[]) => {
+        console.log('Excel import started:', importedProducts);
+        
+        try {
+            const successfulProducts = [];
+            const errors = [];
+
+            for (const product of importedProducts) {
+                try {
+                    // Koli fiyatlarını hesapla (varsayılan 12 adet/koli)
+                    const defaultPiecesPerCase = 12;
+                    const price_per_case = product.price_per_piece * defaultPiecesPerCase;
+                    const price_per_case_usd = product.price_per_piece_usd * defaultPiecesPerCase;
+
+                    const { data, error } = await supabase
+                        .from('products')
+                        .insert({
+                            name: product.name.trim(),
+                            price_per_piece: product.price_per_piece,
+                            price_per_piece_usd: product.price_per_piece_usd,
+                            price_per_case: price_per_case,
+                            price_per_case_usd: price_per_case_usd,
+                            is_active: true
+                        })
+                        .select('id, name')
+                        .single();
+
+                    if (error) {
+                        console.error('Product insert error:', error);
+                        errors.push(`${product.name}: ${error.message}`);
+                    } else {
+                        successfulProducts.push(data);
+                        console.log('Product inserted successfully:', data);
+                    }
+                } catch (err: any) {
+                    console.error('Product processing error:', err);
+                    errors.push(`${product.name}: ${err.message}`);
+                }
+            }
+
+            // Sonuçları kullanıcıya bildir
+            if (successfulProducts.length > 0) {
+                toast.success(`${successfulProducts.length} ürün başarıyla veritabanına kaydedildi!`, {
+                    duration: 5000
+                });
+                
+                // Ürün listesini yenile
+                await fetchData();
+            }
+
+            if (errors.length > 0) {
+                console.error('Import errors:', errors);
+                toast.error(`${errors.length} ürün kaydedilemedi. Console'u kontrol edin.`, {
+                    duration: 8000
+                });
+            }
+
+        } catch (err: any) {
+            console.error('Import process error:', err);
+            toast.error(`İçeri aktarma sırasında hata oluştu: ${err.message}`, {
+                duration: 8000
+            });
+        }
+    };
+
+    if (loading) {
     return (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-        <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-            {product ? 'Ürün Düzenle' : 'Yeni Ürün Ekle'}
-          </h3>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Ürün Kodu</label>
-                <input
-                  type="text"
-                  value={formData.code}
-                  onChange={(e) => setFormData({...formData, code: e.target.value})}
-                  className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Kategori</label>
-                <select
-                  value={formData.category}
-                  onChange={(e) => setFormData({...formData, category: e.target.value})}
-                  className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                >
-                  {categories.map(cat => (
-                    <option key={cat} value={cat}>{cat}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Ürün Adı</label>
-              <input
-                type="text"
-                value={formData.name}
-                onChange={(e) => setFormData({...formData, name: e.target.value})}
-                className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                required
-              />
-            </div>
-
-            <div className="grid grid-cols-1 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Ağırlık (g)</label>
-                <input
-                  type="number"
-                  value={formData.weight}
-                  onChange={(e) => setFormData({...formData, weight: Number(e.target.value)})}
-                  className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  required
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Fiyat</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={formData.price}
-                  onChange={(e) => setFormData({...formData, price: Number(e.target.value)})}
-                  className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Para Birimi</label>
-                <select
-                  value={formData.currency}
-                  onChange={(e) => setFormData({...formData, currency: e.target.value})}
-                  className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                >
-                  <option value="USD">USD</option>
-                  <option value="EUR">EUR</option>
-                  <option value="TRY">TRY</option>
-                </select>
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Açıklama</label>
-              <textarea
-                value={formData.description}
-                onChange={(e) => setFormData({...formData, description: e.target.value})}
-                className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                rows={3}
-              />
-            </div>
-
-            <div className="flex items-center">
-              <input
-                type="checkbox"
-                id="isActive"
-                checked={formData.isActive}
-                onChange={(e) => setFormData({...formData, isActive: e.target.checked})}
-                className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-              />
-              <label htmlFor="isActive" className="ml-2 text-sm font-medium text-gray-700 dark:text-gray-300">
-                Aktif Ürün
-              </label>
-            </div>
-
-            <div className="flex justify-end space-x-3 pt-4">
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-4 py-2 text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700"
-              >
-                İptal
-              </button>
-              <button
-                type="submit"
-                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
-              >
-                {product ? 'Güncelle' : 'Ekle'}
-              </button>
-            </div>
-          </form>
+            <div className="flex items-center justify-center min-h-[400px]">
+                <div className="text-center">
+                    <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-gray-900 dark:border-white mx-auto"></div>
+                    <p className="mt-4 text-gray-600 dark:text-gray-400">Ürünler yükleniyor...</p>
         </div>
       </div>
     );
-  };
+    }
 
-  const ImportModal: React.FC = () => {
+    if (error) {
     return (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-        <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-4xl max-h-[90vh] overflow-y-auto">
-          <div className="flex items-center justify-between mb-6">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Excel İçeri Aktarma</h3>
-            <button
-              onClick={() => {
-                setShowImportModal(false);
-                setImportStep('upload');
-                setExcelData([]);
-                setExcelColumns([]);
-              }}
-              className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-            >
-              <X className="w-5 h-5" />
-            </button>
+            <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
+                <strong className="font-bold">Hata!</strong>
+                <p className="mt-2">{error}</p>
           </div>
-
-          {/* Step Indicator */}
-          <div className="flex items-center mb-6">
-            <div className={`flex items-center ${importStep === 'upload' ? 'text-blue-600' : 'text-green-600'}`}>
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                importStep === 'upload' ? 'bg-blue-100 text-blue-600' : 'bg-green-100 text-green-600'
-              }`}>
-                {importStep === 'upload' ? '1' : <Check className="w-4 h-4" />}
-              </div>
-              <span className="ml-2 text-sm font-medium">Dosya Yükle</span>
-            </div>
-            <div className="flex-1 h-px bg-gray-300 mx-4"></div>
-            <div className={`flex items-center ${
-              importStep === 'mapping' ? 'text-blue-600' : 
-              importStep === 'preview' || importStep === 'complete' ? 'text-green-600' : 'text-gray-400'
-            }`}>
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                importStep === 'mapping' ? 'bg-blue-100 text-blue-600' : 
-                importStep === 'preview' || importStep === 'complete' ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-400'
-              }`}>
-                {importStep === 'preview' || importStep === 'complete' ? <Check className="w-4 h-4" /> : '2'}
-              </div>
-              <span className="ml-2 text-sm font-medium">Sütun Eşleştirme</span>
-            </div>
-            <div className="flex-1 h-px bg-gray-300 mx-4"></div>
-            <div className={`flex items-center ${
-              importStep === 'preview' ? 'text-blue-600' : 
-              importStep === 'complete' ? 'text-green-600' : 'text-gray-400'
-            }`}>
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                importStep === 'preview' ? 'bg-blue-100 text-blue-600' : 
-                importStep === 'complete' ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-400'
-              }`}>
-                {importStep === 'complete' ? <Check className="w-4 h-4" /> : '3'}
-              </div>
-              <span className="ml-2 text-sm font-medium">Önizleme & İçeri Aktar</span>
-            </div>
-          </div>
-
-          {/* Upload Step */}
-          {importStep === 'upload' && (
-            <div className="text-center py-12">
-              <FileSpreadsheet className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-              <h4 className="text-lg font-medium text-gray-900 dark:text-white mb-2">Excel Dosyası Yükle</h4>
-              <p className="text-gray-600 dark:text-gray-400 mb-6">
-                CSV formatında kaydettiğiniz Excel dosyanızı seçin
-              </p>
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={handleFileUpload}
-                accept=".csv,.xlsx,.xls"
-                className="hidden"
-              />
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="flex items-center px-6 py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 mx-auto"
-              >
-                <Upload className="w-4 h-4 mr-2" />
-                Dosya Seç
-              </button>
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-4">
-                Desteklenen formatlar: CSV, XLSX, XLS
-              </p>
-            </div>
-          )}
-
-          {/* Mapping Step */}
-          {importStep === 'mapping' && (
-            <div>
-              <h4 className="text-lg font-medium text-gray-900 dark:text-white mb-4">Sütun Eşleştirme</h4>
-              <p className="text-gray-600 dark:text-gray-400 mb-6">
-                Excel dosyanızdaki sütunları sistem alanlarıyla eşleştirin
-              </p>
-              <div className="space-y-4 max-h-96 overflow-y-auto">
-                {columnMappings.map((mapping) => (
-                  <div key={mapping.productField} className="grid grid-cols-2 gap-4 items-center">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                        {mapping.fieldName}
-                      </label>
-                    </div>
-                    <div>
-                      <select
-                        value={mapping.excelColumn}
-                        onChange={(e) => updateColumnMapping(mapping.productField, e.target.value)}
-                        className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      >
-                        <option value="">-- Sütun Seçin --</option>
-                        {excelColumns.map((column) => (
-                          <option key={column} value={column}>{column}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="flex justify-end space-x-3 mt-6">
-                <button
-                  onClick={() => setImportStep('upload')}
-                  className="px-4 py-2 text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700"
-                >
-                  Geri
-                </button>
-                <button
-                  onClick={() => setImportStep('preview')}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
-                >
-                  Önizleme
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Preview Step */}
-          {importStep === 'preview' && (
-            <div>
-              <h4 className="text-lg font-medium text-gray-900 dark:text-white mb-4">Önizleme</h4>
-              <p className="text-gray-600 dark:text-gray-400 mb-4">
-                {excelData.length} ürün içeri aktarılacak
-              </p>
-              <div className="max-h-64 overflow-y-auto border border-gray-200 dark:border-gray-700 rounded-md">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 dark:bg-gray-700">
-                    <tr>
-                      <th className="px-4 py-2 text-left">Ürün Kodu</th>
-                      <th className="px-4 py-2 text-left">Ürün Adı</th>
-                      <th className="px-4 py-2 text-left">Kategori</th>
-                      <th className="px-4 py-2 text-left">Ağırlık</th>
-                      <th className="px-4 py-2 text-left">Fiyat</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                    {excelData.slice(0, 5).map((row, index) => {
-                      const codeMapping = columnMappings.find(m => m.productField === 'code');
-                      const nameMapping = columnMappings.find(m => m.productField === 'name');
-                      const categoryMapping = columnMappings.find(m => m.productField === 'category');
-                      const weightMapping = columnMappings.find(m => m.productField === 'weight');
-                      const priceMapping = columnMappings.find(m => m.productField === 'price');
-                      
-                      return (
-                        <tr key={index}>
-                          <td className="px-4 py-2">{codeMapping?.excelColumn ? row[codeMapping.excelColumn] : '-'}</td>
-                          <td className="px-4 py-2">{nameMapping?.excelColumn ? row[nameMapping.excelColumn] : '-'}</td>
-                          <td className="px-4 py-2">{categoryMapping?.excelColumn ? row[categoryMapping.excelColumn] : '-'}</td>
-                          <td className="px-4 py-2">{weightMapping?.excelColumn ? row[weightMapping.excelColumn] : '-'}</td>
-                          <td className="px-4 py-2">{priceMapping?.excelColumn ? row[priceMapping.excelColumn] : '-'}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-              {excelData.length > 5 && (
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                  ... ve {excelData.length - 5} ürün daha
-                </p>
-              )}
-              <div className="flex justify-end space-x-3 mt-6">
-                <button
-                  onClick={() => setImportStep('mapping')}
-                  className="px-4 py-2 text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700"
-                >
-                  Geri
-                </button>
-                <button
-                  onClick={processImport}
-                  className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
-                >
-                  İçeri Aktar
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Complete Step */}
-          {importStep === 'complete' && (
-            <div className="text-center py-12">
-              <Check className="w-16 h-16 text-green-600 mx-auto mb-4" />
-              <h4 className="text-lg font-medium text-gray-900 dark:text-white mb-2">İçeri Aktarma Tamamlandı!</h4>
-              <p className="text-gray-600 dark:text-gray-400 mb-6">
-                {excelData.length} ürün başarıyla içeri aktarıldı
-              </p>
-              <button
-                onClick={() => {
-                  setShowImportModal(false);
-                  setImportStep('upload');
-                  setExcelData([]);
-                  setExcelColumns([]);
-                }}
-                className="px-6 py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700"
-              >
-                Tamam
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
     );
-  };
+    }
 
   return (
     <div className="space-y-6">
+            {/* Header */}
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Ürünler</h1>
-        <div className="flex space-x-3">
+            <div>
+                    <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Ürün Yönetimi</h1>
+                    <p className="text-gray-600 dark:text-gray-400">Toplam {products.length} ürün</p>
+              </div>
+          <div className="flex space-x-3">
+            {selectedProducts.length > 0 && (
+              <button
+                onClick={handleBulkDelete}
+                className="flex items-center px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Seçilenleri Sil ({selectedProducts.length})
+              </button>
+            )}
+            <button
+              onClick={() => setShowImportModal(true)}
+              className="flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
+            >
+              <Upload className="w-4 h-4 mr-2" />
+              Excel İçeri Aktar
+            </button>
           <button
-            onClick={() => setShowImportModal(true)}
-            className="flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
-          >
-            <Upload className="w-4 h-4 mr-2" />
-            Excel İçeri Aktar
-          </button>
-          <button
-            onClick={exportToExcel}
+                    onClick={() => setShowAddModal(true)}
             className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
-          >
-            <Download className="w-4 h-4 mr-2" />
-            Excel Dışarı Aktar
-          </button>
-          <button
-            onClick={() => setShowAddModal(true)}
-            className="flex items-center px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700"
           >
             <Plus className="w-4 h-4 mr-2" />
             Yeni Ürün Ekle
           </button>
-        </div>
+          </div>
       </div>
 
-      {/* Summary Cards */}
+            {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-6">
           <div className="flex items-center">
             <div className="p-3 rounded-full bg-blue-100 dark:bg-blue-900">
-              <FileSpreadsheet className="w-6 h-6 text-blue-600 dark:text-blue-400" />
+                            <Package className="w-6 h-6 text-blue-600 dark:text-blue-400" />
             </div>
             <div className="ml-4">
               <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Toplam Ürün</p>
@@ -640,11 +428,11 @@ const Products: React.FC = () => {
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-6">
           <div className="flex items-center">
             <div className="p-3 rounded-full bg-green-100 dark:bg-green-900">
-              <Check className="w-6 h-6 text-green-600 dark:text-green-400" />
+                            <Tag className="w-6 h-6 text-green-600 dark:text-green-400" />
             </div>
             <div className="ml-4">
-              <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Aktif Ürün</p>
-              <p className="text-2xl font-bold text-gray-900 dark:text-white">{products.filter(p => p.isActive).length}</p>
+                            <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Aktif Seriler</p>
+                            <p className="text-2xl font-bold text-gray-900 dark:text-white">{series.length}</p>
             </div>
           </div>
         </div>
@@ -652,11 +440,16 @@ const Products: React.FC = () => {
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-6">
           <div className="flex items-center">
             <div className="p-3 rounded-full bg-purple-100 dark:bg-purple-900">
-              <AlertCircle className="w-6 h-6 text-purple-600 dark:text-purple-400" />
+                            <DollarSign className="w-6 h-6 text-purple-600 dark:text-purple-400" />
             </div>
             <div className="ml-4">
-              <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Kategori Sayısı</p>
-              <p className="text-2xl font-bold text-gray-900 dark:text-white">{categories.length}</p>
+                            <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Ortalama Fiyat (Koli)</p>
+                            <p className="text-2xl font-bold text-gray-900 dark:text-white">
+                                {selectedCurrency === 'EUR' 
+                                  ? `€${products.length > 0 ? (products.reduce((sum, p) => sum + p.price_per_case, 0) / products.length).toFixed(2) : '0.00'}`
+                                  : `$${products.length > 0 ? (products.reduce((sum, p) => sum + (p.price_per_case_usd || p.price_per_case * 1.1), 0) / products.length).toFixed(2) : '0.00'}`
+                                }
+                            </p>
             </div>
           </div>
         </div>
@@ -664,13 +457,11 @@ const Products: React.FC = () => {
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-6">
           <div className="flex items-center">
             <div className="p-3 rounded-full bg-yellow-100 dark:bg-yellow-900">
-              <FileSpreadsheet className="w-6 h-6 text-yellow-600 dark:text-yellow-400" />
+                            <Box className="w-6 h-6 text-yellow-600 dark:text-yellow-400" />
             </div>
             <div className="ml-4">
-              <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Ortalama Fiyat</p>
-              <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                ${products.length > 0 ? (products.reduce((sum, p) => sum + p.price, 0) / products.length).toFixed(2) : '0.00'}
-              </p>
+                            <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Filtrelenen</p>
+                            <p className="text-2xl font-bold text-gray-900 dark:text-white">{filteredProducts.length}</p>
             </div>
           </div>
         </div>
@@ -681,10 +472,10 @@ const Products: React.FC = () => {
         <div className="flex flex-col sm:flex-row gap-4">
           <div className="flex-1">
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500" />
+                            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
               <input
                 type="text"
-                placeholder="Ürün adı veya kodu ara..."
+                                placeholder="Ürün adı veya barkod ara..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -692,14 +483,22 @@ const Products: React.FC = () => {
             </div>
           </div>
           <select
-            value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
+                        value={selectedSeries}
+                        onChange={(e) => setSelectedSeries(e.target.value)}
             className="px-4 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           >
-            <option value="all">Tüm Kategoriler</option>
-            {categories.map(cat => (
-              <option key={cat} value={cat}>{cat}</option>
+                        <option value="all">Tüm Seriler</option>
+                        {series.map(s => (
+                            <option key={s.id} value={s.id}>{s.name}</option>
             ))}
+          </select>
+          <select
+            value={selectedCurrency}
+            onChange={(e) => setSelectedCurrency(e.target.value as 'EUR' | 'USD')}
+            className="px-4 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          >
+            <option value="EUR">€ EUR</option>
+            <option value="USD">$ USD</option>
           </select>
         </div>
       </div>
@@ -710,43 +509,89 @@ const Products: React.FC = () => {
           <table className="w-full">
             <thead className="bg-gray-50 dark:bg-gray-700">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Ürün Kodu</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Ürün Adı</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Kategori</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Ağırlık</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Fiyat</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Durum</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">İşlemler</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                  <input
+                    type="checkbox"
+                    checked={selectedProducts.length === filteredProducts.length && filteredProducts.length > 0}
+                    onChange={handleSelectAll}
+                    className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                  />
+                </th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Ürün Adı</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Seri</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">PROFORMA GRUBU</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                    Koli Fiyatı ({selectedCurrency === 'EUR' ? '€' : '$'})
+                                </th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                    Adet Fiyatı ({selectedCurrency === 'EUR' ? '€' : '$'})
+                                </th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Durum</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">İşlemler</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                        <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
               {filteredProducts.map((product) => (
                 <tr key={product.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-white">
-                    {product.code}
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <input
+                      type="checkbox"
+                      checked={selectedProducts.includes(product.id)}
+                      onChange={() => handleSelectProduct(product.id)}
+                      className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                    />
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
-                    <div>
-                      <div className="text-sm font-medium text-gray-900 dark:text-white">{product.name}</div>
-                      <div className="text-sm text-gray-500 dark:text-gray-400">{product.description}</div>
+                                        <div className="text-sm font-medium text-gray-900 dark:text-white">
+                                            {product.name}
                     </div>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-400">
-                    {product.category}
+                  <td className="px-6 py-4 whitespace-nowrap">
+                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                            {product.series?.name || 'N/A'}
+                                        </span>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <div className="text-sm text-gray-900 dark:text-white">
+                      {(() => {
+                        const proformaGroup = proformaGroups.find(pg => pg.id === product.proforma_group_id);
+                        if (proformaGroup) {
+                          return (
+                    <div>
+                              <div className="font-medium text-blue-600 dark:text-blue-400">{proformaGroup.name}</div>
+                              <div className="text-xs text-gray-500 dark:text-gray-400">{proformaGroup.display_name}</div>
+                            </div>
+                          );
+                        } else {
+                          return (
+                            <div>
+                              <div className="font-medium text-gray-400">Grup Atanmamış</div>
+                              <div className="text-xs text-red-500 dark:text-red-400">Lütfen proforma grubu seçin</div>
+                            </div>
+                          );
+                        }
+                      })()}
+                    </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
-                    {product.weight}g
+                    {selectedCurrency === 'EUR' 
+                      ? `€${product.price_per_case.toFixed(2)}`
+                      : `$${(product.price_per_case_usd || product.price_per_case * 1.1).toFixed(2)}`
+                    }
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
-                    {product.price.toFixed(2)} {product.currency}
+                    {selectedCurrency === 'EUR' 
+                      ? `€${product.price_per_piece.toFixed(2)}`
+                      : `$${(product.price_per_piece_usd || product.price_per_piece * 1.1).toFixed(2)}`
+                    }
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                      product.isActive 
+                                            product.is_active 
                         ? 'bg-green-100 text-green-800' 
                         : 'bg-red-100 text-red-800'
                     }`}>
-                      {product.isActive ? 'Aktif' : 'Pasif'}
+                                            {product.is_active ? 'Aktif' : 'Pasif'}
                     </span>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
@@ -761,7 +606,7 @@ const Products: React.FC = () => {
                         <Edit className="w-4 h-4" />
                       </button>
                       <button
-                        onClick={() => setProducts(prev => prev.filter(p => p.id !== product.id))}
+                        onClick={() => handleDeleteClick(product)}
                         className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -777,8 +622,13 @@ const Products: React.FC = () => {
 
       {/* Add/Edit Modal */}
       {showAddModal && (
-        <ProductForm
+                <ProductModal
           product={editingProduct}
+                    series={series}
+                    productTypes={productTypes}
+                    proformaGroups={proformaGroups}
+                    groupsLoading={groupsLoading}
+                    onSave={handleSaveProduct}
           onClose={() => {
             setShowAddModal(false);
             setEditingProduct(null);
@@ -786,9 +636,683 @@ const Products: React.FC = () => {
         />
       )}
 
-      {/* Import Modal */}
-      {showImportModal && <ImportModal />}
+      {/* Product Import Modal */}
+      {showImportModal && (
+        <ProductImport
+          onClose={() => setShowImportModal(false)}
+          onImportComplete={handleImportComplete}
+        />
+      )}
+
+      {/* Delete Confirmation Dialog */}
+      {deleteConfirmation.show && deleteConfirmation.product && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-md">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Ürün Silme Onayı</h3>
+              <button
+                onClick={handleCancelDelete}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="mb-6">
+              <div className="flex items-center mb-4">
+                <div className="flex-shrink-0 w-10 h-10 bg-red-100 dark:bg-red-900/20 rounded-full flex items-center justify-center">
+                  <Trash2 className="w-5 h-5 text-red-600 dark:text-red-400" />
+                </div>
+                <div className="ml-4">
+                  <h4 className="text-lg font-medium text-gray-900 dark:text-white">Ürünü Sil</h4>
+                </div>
+              </div>
+              
+              <p className="text-gray-600 dark:text-gray-400 mb-4">
+                <strong>"{deleteConfirmation.product.name}"</strong> adlı ürünü silmek istediğinizden emin misiniz?
+              </p>
+              
+              <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3">
+                <p className="text-sm text-yellow-700 dark:text-yellow-300">
+                  ⚠️ Bu işlem ürünü pasif hale getirecektir. Ürün tamamen silinmeyecek, sadece görünmez olacaktır.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={handleCancelDelete}
+                className="px-4 py-2 text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700"
+              >
+                İptal
+              </button>
+              <button
+                onClick={handleConfirmDelete}
+                className="flex items-center px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Ürünü Sil
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Delete Confirmation Dialog */}
+      {showBulkDeleteConfirm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-md">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Toplu Silme Onayı</h3>
+              <button
+                onClick={handleCancelBulkDelete}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="mb-6">
+              <div className="flex items-center mb-4">
+                <div className="flex-shrink-0 w-10 h-10 bg-red-100 dark:bg-red-900/20 rounded-full flex items-center justify-center">
+                  <Trash2 className="w-5 h-5 text-red-600 dark:text-red-400" />
+                </div>
+                <div className="ml-4">
+                  <h4 className="text-lg font-medium text-gray-900 dark:text-white">Ürünleri Sil</h4>
+                </div>
+              </div>
+              
+              <p className="text-gray-600 dark:text-gray-400 mb-4">
+                <strong>{selectedProducts.length}</strong> adet seçili ürünü silmek istediğinizden emin misiniz?
+              </p>
+              
+              <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3 mb-4">
+                <p className="text-sm text-yellow-700 dark:text-yellow-300">
+                  ⚠️ Bu işlem seçili ürünleri pasif hale getirecektir. Ürünler tamamen silinmeyecek, sadece görünmez olacaktır.
+                </p>
+              </div>
+
+              <div className="max-h-32 overflow-y-auto bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+                <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Silinecek ürünler:</p>
+                <ul className="text-sm text-gray-600 dark:text-gray-400 space-y-1">
+                  {products
+                    .filter(p => selectedProducts.includes(p.id))
+                    .map(product => (
+                      <li key={product.id} className="truncate">• {product.name}</li>
+                    ))
+                  }
+                </ul>
+              </div>
+            </div>
+
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={handleCancelBulkDelete}
+                className="px-4 py-2 text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700"
+              >
+                İptal
+              </button>
+              <button
+                onClick={handleConfirmBulkDelete}
+                className="flex items-center px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                {selectedProducts.length} Ürünü Sil
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+        </div>
+    );
+};
+
+// Product Modal Component
+interface ProductModalProps {
+    product: Product | null;
+    series: Series[];
+    productTypes: ProductType[];
+    proformaGroups: ProformaGroup[];
+    groupsLoading: boolean;
+    onSave: (productData: Partial<Product>) => void;
+    onClose: () => void;
+}
+
+const ProductModal: React.FC<ProductModalProps> = ({ product, series, proformaGroups, groupsLoading, onSave, onClose }) => {
+    const [formData, setFormData] = useState({
+        name: product?.name || '',
+        series_id: product?.series_id || '',
+        price_per_case: product?.price_per_case || 0,
+        price_per_piece: product?.price_per_piece || 0,
+        price_per_case_usd: product?.price_per_case_usd || 0,
+        price_per_piece_usd: product?.price_per_piece_usd || 0,
+        barcode: product?.barcode || '',
+        is_active: product?.is_active ?? true,
+        proforma_group_id: product?.proforma_group_id || ''
+    });
+
+    // Yeni seri ekleme state'leri
+    const [showAddSeriesModal, setShowAddSeriesModal] = useState(false);
+    const [newSeriesData, setNewSeriesData] = useState({
+        name: '',
+        pieces_per_case: 1,
+        net_weight_kg_per_piece: 0,
+        packaging_weight_kg_per_case: 0,
+        width_cm: 0,
+        length_cm: 0,
+        height_cm: 0,
+        description: ''
+    });
+
+    // Seçili seri bilgisi
+    const selectedSeries = series.find(s => s.id === formData.series_id);
+
+    // Update formData when product prop changes
+    useEffect(() => {
+        console.log('🔄 ProductModal - product prop changed:', product);
+        console.log('💰 USD prices from product:', {
+            price_per_case_usd: product?.price_per_case_usd,
+            price_per_piece_usd: product?.price_per_piece_usd
+        });
+        
+        setFormData({
+            name: product?.name || '',
+            series_id: product?.series_id || '',
+            price_per_case: product?.price_per_case || 0,
+            price_per_piece: product?.price_per_piece || 0,
+            price_per_case_usd: product?.price_per_case_usd || 0,
+            price_per_piece_usd: product?.price_per_piece_usd || 0,
+            barcode: product?.barcode || '',
+            is_active: product?.is_active ?? true,
+            proforma_group_id: product?.proforma_group_id || ''
+        });
+    }, [product]);
+
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        onSave(formData);
+    };
+
+    // Otomatik fiyat hesaplama fonksiyonları
+    const calculateCasePriceFromPiece = (piecePrice: number) => {
+        if (!selectedSeries) return piecePrice;
+        return piecePrice * selectedSeries.pieces_per_case;
+    };
+
+    const handlePiecePriceChange = (piecePrice: number, currency: 'EUR' | 'USD') => {
+        console.log('Piece price changed:', piecePrice, 'Currency:', currency, 'Series:', selectedSeries);
+        const casePrice = calculateCasePriceFromPiece(piecePrice);
+        console.log('Calculated case price:', casePrice);
+        
+        if (currency === 'EUR') {
+            setFormData(prev => ({
+                ...prev,
+                price_per_piece: piecePrice,
+                price_per_case: casePrice
+            }));
+        } else {
+            setFormData(prev => ({
+                ...prev,
+                price_per_piece_usd: piecePrice,
+                price_per_case_usd: casePrice
+            }));
+        }
+    };
+
+    // Yeni seri ekleme fonksiyonu
+    const handleAddSeries = async () => {
+        try {
+            const { data, error } = await supabase
+                .from('series')
+                .insert({
+                    name: newSeriesData.name,
+                    pieces_per_case: newSeriesData.pieces_per_case,
+                    net_weight_kg_per_piece: newSeriesData.net_weight_kg_per_piece,
+                    packaging_weight_kg_per_case: newSeriesData.packaging_weight_kg_per_case,
+                    width_cm: newSeriesData.width_cm || null,
+                    length_cm: newSeriesData.length_cm || null,
+                    height_cm: newSeriesData.height_cm || null,
+                    description: newSeriesData.description || null
+                })
+                .select()
+                .single();
+
+            if (error) throw error;
+
+            // Yeni seriyi formData'ya ata
+            setFormData(prev => ({ ...prev, series_id: data.id }));
+            
+            // Modal'ı kapat ve formu temizle
+            setShowAddSeriesModal(false);
+            setNewSeriesData({
+                name: '',
+                pieces_per_case: 1,
+                net_weight_kg_per_piece: 0,
+                packaging_weight_kg_per_case: 0,
+                width_cm: 0,
+                length_cm: 0,
+                height_cm: 0,
+                description: ''
+            });
+
+            // Başarı mesajı
+            toast.success('Yeni seri başarıyla eklendi!', {
+                icon: '✅',
+                duration: 3000
+            });
+
+            // Sayfayı yenile (serileri tekrar çek)
+            window.location.reload();
+        } catch (err: any) {
+            toast.error(`Hata: ${err.message}`, {
+                icon: '❌',
+                duration: 5000
+            });
+        }
+    };
+
+    return (
+        <>
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-2xl">
+                    <div className="flex items-center justify-between mb-6">
+                        <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                            {product ? 'Ürün Düzenle' : 'Yeni Ürün Ekle'}
+                        </h3>
+                        <button
+                            onClick={onClose}
+                            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                        >
+                            <X className="w-5 h-5" />
+                        </button>
     </div>
+
+                    <form onSubmit={handleSubmit} className="space-y-4">
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                Ürün Adı
+                            </label>
+                            <input
+                                type="text"
+                                value={formData.name}
+                                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                                className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                required
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                Seri
+                            </label>
+                            <div className="flex space-x-2">
+                                <select
+                                    value={formData.series_id}
+                                    onChange={(e) => {
+                                        const newSeriesId = e.target.value;
+                                        setFormData({ ...formData, series_id: newSeriesId });
+                                        
+                                        // Seri değiştiğinde fiyatları güncelle
+                                        if (newSeriesId && formData.price_per_piece > 0) {
+                                            const newSeries = series.find(s => s.id === newSeriesId);
+                                            if (newSeries) {
+                                                const newCasePrice = formData.price_per_piece * newSeries.pieces_per_case;
+                                                const newCasePriceUsd = formData.price_per_piece_usd * newSeries.pieces_per_case;
+                                                setFormData(prev => ({
+                                                    ...prev,
+                                                    series_id: newSeriesId,
+                                                    price_per_case: newCasePrice,
+                                                    price_per_case_usd: newCasePriceUsd
+                                                }));
+                                            }
+                                        }
+                                    }}
+                                    className="flex-1 p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                    required
+                                >
+                                    <option value="">Seri seçin...</option>
+                                    {series.map(s => (
+                                        <option key={s.id} value={s.id}>
+                                            {s.name} ({s.pieces_per_case} adet/koli)
+                                        </option>
+                                    ))}
+                                </select>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowAddSeriesModal(true)}
+                                    className="px-4 py-3 bg-green-600 text-white rounded-md hover:bg-green-700 text-sm font-medium whitespace-nowrap"
+                                >
+                                    YENİ SERİ EKLE
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Proforma Group Section */}
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                Proforma Grubu
+                            </label>
+                            <select
+                                value={formData.proforma_group_id}
+                                onChange={(e) => {
+                                    setFormData({ 
+                                        ...formData, 
+                                        proforma_group_id: e.target.value
+                                    });
+                                }}
+                                className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                disabled={groupsLoading}
+                            >
+                                <option value="">
+                                    {groupsLoading ? 'Yükleniyor...' : 'Proforma grubu seçin...'}
+                                </option>
+                                {proformaGroups.map(pg => (
+                                    <option key={pg.id} value={pg.id}>
+                                        {pg.name} - {pg.display_name}
+                                    </option>
+                                ))}
+                            </select>
+                            {formData.proforma_group_id && (
+                                <div className="mt-2 p-2 bg-blue-50 dark:bg-blue-900/20 rounded-md">
+                                    <div className="text-sm text-blue-700 dark:text-blue-300">
+                                        ✓ Seçilen: {proformaGroups.find(pg => pg.id === formData.proforma_group_id)?.display_name}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Manual Group Addition */}
+                        <div className="bg-gray-50 dark:bg-gray-700 p-4 rounded-md">
+                            <div className="flex items-center justify-between mb-2">
+                                <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300">Yeni Proforma Grubu Ekle</h4>
+                            </div>
+                            <div className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                                Listede istediğiniz grup yoksa, yeni grup adını yazın:
+                            </div>
+                            <input
+                                type="text"
+                                placeholder="Örn: OLIVE OIL SHOWER GEL 1000ML"
+                                className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md text-sm"
+                                onKeyPress={(e) => {
+                                    if (e.key === 'Enter' && e.currentTarget.value.trim()) {
+                                        // Here you would call addProformaGroup
+                                        console.log('Add new group:', e.currentTarget.value);
+                                        e.currentTarget.value = '';
+                                    }
+                                }}
+                            />
+                        </div>
+
+                        
+
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                    Adet Fiyatı (€)
+                                </label>
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    value={formData.price_per_piece}
+                                    onChange={(e) => {
+                                        const value = e.target.value.replace(',', '.');
+                                        const numValue = parseFloat(value) || 0;
+                                        console.log('Input value:', e.target.value, 'Parsed value:', numValue);
+                                        handlePiecePriceChange(numValue, 'EUR');
+                                    }}
+                                    className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                    required
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                    Koli Fiyatı (€) {selectedSeries && <span className="text-xs text-gray-500">({selectedSeries.pieces_per_case} adet - Otomatik hesaplanır)</span>}
+                                </label>
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    value={formData.price_per_case}
+                                    onChange={(e) => {
+                                        const value = e.target.value.replace(',', '.');
+                                        const numValue = parseFloat(value) || 0;
+                                        setFormData({ ...formData, price_per_case: numValue });
+                                    }}
+                                    className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                    required
+                                />
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                    Adet Fiyatı ($)
+                                </label>
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    value={formData.price_per_piece_usd}
+                                    onChange={(e) => {
+                                        const value = e.target.value.replace(',', '.');
+                                        const numValue = parseFloat(value) || 0;
+                                        console.log('Input value:', e.target.value, 'Parsed value:', numValue);
+                                        handlePiecePriceChange(numValue, 'USD');
+                                    }}
+                                    className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                    required
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                    Koli Fiyatı ($) {selectedSeries && <span className="text-xs text-gray-500">({selectedSeries.pieces_per_case} adet - Otomatik hesaplanır)</span>}
+                                </label>
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    value={formData.price_per_case_usd}
+                                    onChange={(e) => {
+                                        const value = e.target.value.replace(',', '.');
+                                        const numValue = parseFloat(value) || 0;
+                                        setFormData({ ...formData, price_per_case_usd: numValue });
+                                    }}
+                                    className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                    required
+                                />
+                            </div>
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                Barkod (Opsiyonel)
+                            </label>
+                            <input
+                                type="text"
+                                value={formData.barcode}
+                                onChange={(e) => setFormData({ ...formData, barcode: e.target.value })}
+                                className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            />
+                        </div>
+
+                        <div className="flex items-center">
+                            <input
+                                type="checkbox"
+                                id="is_active"
+                                checked={formData.is_active}
+                                onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
+                                className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                            />
+                            <label htmlFor="is_active" className="ml-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+                                Aktif Ürün
+                            </label>
+                        </div>
+
+                        <div className="flex justify-end space-x-3 pt-6">
+                            <button
+                                type="button"
+                                onClick={onClose}
+                                className="px-4 py-2 text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700"
+                            >
+                                İptal
+                            </button>
+                            <button
+                                type="submit"
+                                className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                            >
+                                <Save className="w-4 h-4 mr-2" />
+                                {product ? 'Güncelle' : 'Kaydet'}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            {/* Yeni Seri Ekleme Modal */}
+            {showAddSeriesModal && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60]">
+                    <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-md">
+                        <div className="flex items-center justify-between mb-6">
+                            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                                Yeni Seri Ekle
+                            </h3>
+                            <button
+                                onClick={() => setShowAddSeriesModal(false)}
+                                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                    Seri Adı *
+                                </label>
+                                <input
+                                    type="text"
+                                    value={newSeriesData.name}
+                                    onChange={(e) => setNewSeriesData({ ...newSeriesData, name: e.target.value })}
+                                    placeholder="Örn: 500ML X12"
+                                    className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md"
+                                    required
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                    Koli Başına Adet *
+                                </label>
+                                <input
+                                    type="number"
+                                    value={newSeriesData.pieces_per_case}
+                                    onChange={(e) => setNewSeriesData({ ...newSeriesData, pieces_per_case: parseInt(e.target.value) || 1 })}
+                                    className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md"
+                                    required
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                    Adet Başına Net Ağırlık (kg) *
+                                </label>
+                                <input
+                                    type="number"
+                                    step="0.001"
+                                    value={newSeriesData.net_weight_kg_per_piece}
+                                    onChange={(e) => setNewSeriesData({ ...newSeriesData, net_weight_kg_per_piece: parseFloat(e.target.value) || 0 })}
+                                    placeholder="0.500"
+                                    className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md"
+                                    required
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                    Koli Ambalaj Ağırlığı (kg) *
+                                </label>
+                                <input
+                                    type="number"
+                                    step="0.001"
+                                    value={newSeriesData.packaging_weight_kg_per_case}
+                                    onChange={(e) => setNewSeriesData({ ...newSeriesData, packaging_weight_kg_per_case: parseFloat(e.target.value) || 0 })}
+                                    placeholder="1.297"
+                                    className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md"
+                                    required
+                                />
+                            </div>
+
+                            <div className="grid grid-cols-3 gap-2">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                        Genişlik (cm)
+                                    </label>
+                                    <input
+                                        type="number"
+                                        value={newSeriesData.width_cm}
+                                        onChange={(e) => setNewSeriesData({ ...newSeriesData, width_cm: parseInt(e.target.value) || 0 })}
+                                        className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                        Uzunluk (cm)
+                                    </label>
+                                    <input
+                                        type="number"
+                                        value={newSeriesData.length_cm}
+                                        onChange={(e) => setNewSeriesData({ ...newSeriesData, length_cm: parseInt(e.target.value) || 0 })}
+                                        className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                        Yükseklik (cm)
+                                    </label>
+                                    <input
+                                        type="number"
+                                        value={newSeriesData.height_cm}
+                                        onChange={(e) => setNewSeriesData({ ...newSeriesData, height_cm: parseInt(e.target.value) || 0 })}
+                                        className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md"
+                                    />
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                    Açıklama
+                                </label>
+                                <textarea
+                                    value={newSeriesData.description}
+                                    onChange={(e) => setNewSeriesData({ ...newSeriesData, description: e.target.value })}
+                                    placeholder="Seri hakkında açıklama..."
+                                    className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md"
+                                    rows={2}
+                                />
+                            </div>
+
+                            <div className="flex justify-end space-x-3 pt-4">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowAddSeriesModal(false)}
+                                    className="px-4 py-2 text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700"
+                                >
+                                    İptal
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={handleAddSeries}
+                                    disabled={!newSeriesData.name || !newSeriesData.pieces_per_case || !newSeriesData.net_weight_kg_per_piece || !newSeriesData.packaging_weight_kg_per_case}
+                                    className="flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                                >
+                                    <Plus className="w-4 h-4 mr-2" />
+                                    Seri Ekle
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+        </>
   );
 };
 
