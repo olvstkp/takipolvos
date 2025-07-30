@@ -73,14 +73,12 @@ const Products: React.FC = () => {
   const [showImportModal, setShowImportModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState<{show: boolean, product: Product | null}>({show: false, product: null});
-  const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
-  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+      const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
+    const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
 
     // Fetch products and series
-    const fetchData = async (preserveScroll = false) => {
+    const fetchData = async () => {
         try {
-            // Save current scroll position if preserveScroll is true
-            const currentScrollY = preserveScroll ? window.scrollY : 0;
             
             setLoading(true);
             
@@ -115,13 +113,7 @@ const Products: React.FC = () => {
             if (productsError) throw productsError;
             setProducts(productsData || []);
             
-            // Restore scroll position after data update if preserveScroll is true
-            if (preserveScroll) {
-                // Use setTimeout to ensure DOM has updated
-                setTimeout(() => {
-                    window.scrollTo(0, currentScrollY);
-                }, 0);
-            }
+            // Note: Scroll position will be restored in useEffect when products state changes
         } catch (err: any) {
             setError(err.message);
         } finally {
@@ -132,6 +124,8 @@ const Products: React.FC = () => {
     useEffect(() => {
         fetchData();
     }, []);
+
+
 
     // Filtered products
   const filteredProducts = products.filter(product => {
@@ -148,7 +142,7 @@ const Products: React.FC = () => {
 
             if (editingProduct) {
                 // Update existing product
-                const { error } = await supabase
+                const { data: updated, error } = await supabase
                     .from('products')
                     .update({
                         name: productData.name,
@@ -161,10 +155,32 @@ const Products: React.FC = () => {
                         is_active: productData.is_active,
                         proforma_group_id: productData.proforma_group_id || null
                     })
-                    .eq('id', editingProduct.id);
+                    .eq('id', editingProduct.id)
+                    .select(`
+                        *,
+                        series (
+                            id,
+                            name,
+                            pieces_per_case,
+                            net_weight_kg_per_piece,
+                            packaging_weight_kg_per_case,
+                            description,
+                            is_active
+                        )
+                    `)
+                    .single();
 
                 if (error) throw error;
                 productId = editingProduct.id;
+                
+                // Update local state with the updated product from Supabase
+                setProducts(prevProducts => 
+                    prevProducts.map(p => 
+                        p.id === editingProduct.id 
+                            ? updated
+                            : p
+                    )
+                );
             } else {
                 // Add new product
                 const { data, error } = await supabase
@@ -180,11 +196,25 @@ const Products: React.FC = () => {
                         is_active: productData.is_active,
                         proforma_group_id: productData.proforma_group_id || null
                     })
-                    .select('id')
+                    .select(`
+                        *,
+                        series (
+                            id,
+                            name,
+                            pieces_per_case,
+                            net_weight_kg_per_piece,
+                            packaging_weight_kg_per_case,
+                            description,
+                            is_active
+                        )
+                    `)
                     .single();
 
                 if (error) throw error;
                 productId = data?.id;
+                
+                // Add to local state immediately
+                setProducts(prevProducts => [...prevProducts, data]);
             }
 
             // Save proforma group assignment to both Supabase and localStorage
@@ -251,8 +281,14 @@ const Products: React.FC = () => {
                 position: 'top-right',
             });
             
-            // Refresh data to show latest changes, preserving scroll position
-            await fetchData(true);
+            // Update local state immediately
+            setProducts(prevProducts => 
+                prevProducts.map(p => 
+                    p.id === deleteConfirmation.product?.id 
+                        ? { ...p, is_active: false }
+                        : p
+                )
+            );
             setDeleteConfirmation({show: false, product: null});
         } catch (err: any) {
             toast.error(`Hata: ${err.message}`);
@@ -302,8 +338,14 @@ const Products: React.FC = () => {
                 position: 'top-right',
             });
             
-            // Refresh data to show latest changes, preserving scroll position
-            await fetchData(true);
+            // Update local state immediately
+            setProducts(prevProducts => 
+                prevProducts.map(p => 
+                    selectedProducts.includes(p.id)
+                        ? { ...p, is_active: false }
+                        : p
+                )
+            );
             setSelectedProducts([]);
             setShowBulkDeleteConfirm(false);
         } catch (err: any) {
@@ -362,8 +404,8 @@ const Products: React.FC = () => {
                     duration: 5000
                 });
                 
-                // Ürün listesini yenile, scroll pozisyonunu koruyarak
-                await fetchData(true);
+                // Ürün listesini yenile
+                await fetchData();
             }
 
             if (errors.length > 0) {
@@ -654,9 +696,8 @@ const Products: React.FC = () => {
                     proformaGroups={proformaGroups}
                     groupsLoading={groupsLoading}
                     onSave={handleSaveProduct}
-          onClose={async () => {
-            // Refresh data when modal is closed, preserving scroll position
-            await fetchData(true);
+          onClose={() => {
+            // No need to fetch data - local state is already updated
             setShowAddModal(false);
             setEditingProduct(null);
           }}
