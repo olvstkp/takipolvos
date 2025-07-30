@@ -347,7 +347,7 @@ export const useProformaGroups = () => {
                 .from('proforma_groups')
                 .select('*')
                 .eq('is_active', true)
-                .order('sort_order', { ascending: true });
+                .order('id', { ascending: true });
 
             if (supabaseError) {
                 console.error('Supabase error:', supabaseError);
@@ -368,17 +368,28 @@ export const useProformaGroups = () => {
 
     const addProformaGroup = async (groupData: any) => {
         try {
+            // Generate next ID
+            const { data: existingGroups } = await supabase
+                .from('proforma_groups')
+                .select('id')
+                .order('id');
+
+            let nextId = 'pg_1';
+            if (existingGroups && existingGroups.length > 0) {
+                const maxNum = Math.max(...existingGroups
+                    .map(g => parseInt(g.id.replace('pg_', '')))
+                    .filter(num => !isNaN(num))
+                );
+                nextId = `pg_${maxNum + 1}`;
+            }
+
             // Supabase'e ekle
             const { data, error } = await supabase
                 .from('proforma_groups')
                 .insert({
+                    id: nextId,
                     name: groupData.name,
-                    display_name: groupData.display_name,
-                    group_type: groupData.group_type,
-                    size_value: groupData.size_value,
-                    size_unit: groupData.size_unit,
-                    is_liquid: groupData.is_liquid,
-                    sort_order: proformaGroups.length + 1
+                    is_active: true
                 })
                 .select()
                 .single();
@@ -421,11 +432,12 @@ export const useProformaGroups = () => {
         }
     };
 
-    return { 
-        proformaGroups, 
-        loading, 
-        error, 
-        addProformaGroup, 
+        return {
+        proformaGroups,
+        setProformaGroups,
+        loading,
+        error,
+        addProformaGroup,
         setProductGroupAssignment,
         getProductGroupAssignments
     };

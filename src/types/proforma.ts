@@ -11,14 +11,8 @@ export interface Customer {
 }
 
 export interface ProformaGroup {
-  id: string;
+  id: string; // "pg_1", "pg_2", "pg_3", etc.
   name: string; // "OLIVE OIL SHOWER GEL 750ML"
-  display_name: string; // Daha açıklayıcı isim
-  group_type: string; // "SHOWER GEL", "LIQUID SOAP", "SOAP"
-  size_value?: number; // 750, 450, 100, 125
-  size_unit?: string; // "ML", "G"
-  is_liquid: boolean;
-  sort_order: number;
 }
 
 export interface ProductType {

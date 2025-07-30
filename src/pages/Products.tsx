@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Plus, Edit, Trash2, Save, X, Package, DollarSign, Tag, Box, Upload } from 'lucide-react';
+import { Search, Plus, Edit, Trash2, Save, X, Package, DollarSign, Tag, Box, Upload, Settings } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useProductTypes, useProformaGroups } from '../hooks/useProforma';
 import toast from 'react-hot-toast';
 import ProductImport from '../components/ProductImport';
+import SeriesManagement from '../components/SeriesManagement';
+import ProformaGroupsManagement from '../components/ProformaGroupsManagement';
 
 interface Series {
   id: string;
@@ -25,12 +27,6 @@ interface ProductType {
 interface ProformaGroup {
     id: string;
     name: string;
-    display_name: string;
-    group_type: string;
-    size_value?: number;
-    size_unit?: string;
-    is_liquid: boolean;
-    sort_order: number;
 }
 
 interface Product {
@@ -59,7 +55,7 @@ const Products: React.FC = () => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const { productTypes } = useProductTypes();
-    const { proformaGroups, loading: groupsLoading, setProductGroupAssignment } = useProformaGroups();
+    const { proformaGroups, setProformaGroups, loading: groupsLoading, setProductGroupAssignment } = useProformaGroups();
     const [selectedCurrency, setSelectedCurrency] = useState<'EUR' | 'USD'>('EUR');
     
     // Debug: Proforma groups yüklendiğinde console'a yazdır
@@ -75,6 +71,8 @@ const Products: React.FC = () => {
   const [deleteConfirmation, setDeleteConfirmation] = useState<{show: boolean, product: Product | null}>({show: false, product: null});
       const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
     const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+    const [showSeriesManagement, setShowSeriesManagement] = useState(false);
+    const [showProformaGroupsManagement, setShowProformaGroupsManagement] = useState(false);
 
     // Fetch products and series
     const fetchData = async () => {
@@ -423,6 +421,12 @@ const Products: React.FC = () => {
         }
     };
 
+    // Yeni proforma grubu eklendiğinde çağrılacak fonksiyon
+    const handleProformaGroupAdded = (newGroup: ProformaGroup) => {
+        // Proforma grupları listesine yeni grubu ekle
+        setProformaGroups((prev: ProformaGroup[]) => [...prev, newGroup]);
+    };
+
     if (loading) {
     return (
             <div className="flex items-center justify-center min-h-[400px]">
@@ -461,6 +465,20 @@ const Products: React.FC = () => {
                 Seçilenleri Sil ({selectedProducts.length})
               </button>
             )}
+            <button
+              onClick={() => setShowSeriesManagement(true)}
+              className="flex items-center px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700"
+            >
+              <Settings className="w-4 h-4 mr-2" />
+              Seri Yönetimi
+            </button>
+            <button
+              onClick={() => setShowProformaGroupsManagement(true)}
+              className="flex items-center px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
+            >
+              <Tag className="w-4 h-4 mr-2" />
+              Proforma Grupları
+            </button>
             <button
               onClick={() => setShowImportModal(true)}
               className="flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
@@ -626,7 +644,6 @@ const Products: React.FC = () => {
                           return (
                     <div>
                               <div className="font-medium text-blue-600 dark:text-blue-400">{proformaGroup.name}</div>
-                              <div className="text-xs text-gray-500 dark:text-gray-400">{proformaGroup.display_name}</div>
                             </div>
                           );
                         } else {
@@ -696,6 +713,7 @@ const Products: React.FC = () => {
                     proformaGroups={proformaGroups}
                     groupsLoading={groupsLoading}
                     onSave={handleSaveProduct}
+                    onProformaGroupAdded={handleProformaGroupAdded}
           onClose={() => {
             // No need to fetch data - local state is already updated
             setShowAddModal(false);
@@ -709,6 +727,20 @@ const Products: React.FC = () => {
         <ProductImport
           onClose={() => setShowImportModal(false)}
           onImportComplete={handleImportComplete}
+        />
+      )}
+
+      {/* Series Management Modal */}
+      {showSeriesManagement && (
+        <SeriesManagement
+          onClose={() => setShowSeriesManagement(false)}
+        />
+      )}
+
+      {/* Proforma Groups Management Modal */}
+      {showProformaGroupsManagement && (
+        <ProformaGroupsManagement
+          onClose={() => setShowProformaGroupsManagement(false)}
         />
       )}
 
@@ -844,9 +876,10 @@ interface ProductModalProps {
     groupsLoading: boolean;
     onSave: (productData: Partial<Product>) => void;
     onClose: () => void;
+    onProformaGroupAdded?: (newGroup: ProformaGroup) => void;
 }
 
-const ProductModal: React.FC<ProductModalProps> = ({ product, series, proformaGroups, groupsLoading, onSave, onClose }) => {
+const ProductModal: React.FC<ProductModalProps> = ({ product, series, proformaGroups, groupsLoading, onSave, onClose, onProformaGroupAdded }) => {
     const [formData, setFormData] = useState({
         name: product?.name || '',
         series_id: product?.series_id || '',
@@ -870,6 +903,12 @@ const ProductModal: React.FC<ProductModalProps> = ({ product, series, proformaGr
         length_cm: 0,
         height_cm: 0,
         description: ''
+    });
+
+    // Yeni proforma grubu ekleme state'leri
+    const [showAddProformaGroupModal, setShowAddProformaGroupModal] = useState(false);
+    const [newProformaGroupData, setNewProformaGroupData] = useState({
+        name: ''
     });
 
     // Seçili seri bilgisi
@@ -979,6 +1018,63 @@ const ProductModal: React.FC<ProductModalProps> = ({ product, series, proformaGr
         }
     };
 
+    // Yeni proforma grubu ekleme fonksiyonu
+    const handleAddProformaGroup = async () => {
+        try {
+            // Generate next ID
+            const { data: existingGroups } = await supabase
+                .from('proforma_groups')
+                .select('id')
+                .order('id');
+
+            let nextId = 'pg_1';
+            if (existingGroups && existingGroups.length > 0) {
+                const maxNum = Math.max(...existingGroups
+                    .map(g => parseInt(g.id.replace('pg_', '')))
+                    .filter(num => !isNaN(num))
+                );
+                nextId = `pg_${maxNum + 1}`;
+            }
+
+            const { data, error } = await supabase
+                .from('proforma_groups')
+                .insert({
+                    id: nextId,
+                    name: newProformaGroupData.name,
+                    is_active: true
+                })
+                .select()
+                .single();
+
+            if (error) throw error;
+
+            // Yeni grubu formData'ya ata
+            setFormData(prev => ({ ...prev, proforma_group_id: data.id }));
+            
+            // Modal'ı kapat ve formu temizle
+            setShowAddProformaGroupModal(false);
+            setNewProformaGroupData({
+                name: ''
+            });
+
+            // Başarı mesajı
+            toast.success('Yeni proforma grubu başarıyla eklendi!', {
+                icon: '✅',
+                duration: 3000
+            });
+
+            // Parent component'e yeni grup bilgisini gönder
+            if (onProformaGroupAdded) {
+                onProformaGroupAdded(data);
+            }
+        } catch (err: any) {
+            toast.error(`Hata: ${err.message}`, {
+                icon: '❌',
+                duration: 5000
+            });
+        }
+    };
+
     return (
         <>
             <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -1060,55 +1156,42 @@ const ProductModal: React.FC<ProductModalProps> = ({ product, series, proformaGr
                             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                                 Proforma Grubu
                             </label>
-                            <select
-                                value={formData.proforma_group_id}
-                                onChange={(e) => {
-                                    setFormData({ 
-                                        ...formData, 
-                                        proforma_group_id: e.target.value
-                                    });
-                                }}
-                                className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                                disabled={groupsLoading}
-                            >
-                                <option value="">
-                                    {groupsLoading ? 'Yükleniyor...' : 'Proforma grubu seçin...'}
-                                </option>
-                                {proformaGroups.map(pg => (
-                                    <option key={pg.id} value={pg.id}>
-                                        {pg.name} - {pg.display_name}
+                            <div className="flex space-x-2">
+                                <select
+                                    value={formData.proforma_group_id}
+                                    onChange={(e) => {
+                                        setFormData({ 
+                                            ...formData, 
+                                            proforma_group_id: e.target.value
+                                        });
+                                    }}
+                                    className="flex-1 p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                    disabled={groupsLoading}
+                                >
+                                    <option value="">
+                                        {groupsLoading ? 'Yükleniyor...' : 'Proforma grubu seçin...'}
                                     </option>
-                                ))}
-                            </select>
+                                    {proformaGroups.map(pg => (
+                                        <option key={pg.id} value={pg.id}>
+                                            {pg.name}
+                                        </option>
+                                    ))}
+                                </select>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowAddProformaGroupModal(true)}
+                                    className="px-4 py-3 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 text-sm font-medium whitespace-nowrap"
+                                >
+                                    YENİ GRUP EKLE
+                                </button>
+                            </div>
                             {formData.proforma_group_id && (
                                 <div className="mt-2 p-2 bg-blue-50 dark:bg-blue-900/20 rounded-md">
                                     <div className="text-sm text-blue-700 dark:text-blue-300">
-                                        ✓ Seçilen: {proformaGroups.find(pg => pg.id === formData.proforma_group_id)?.display_name}
+                                        ✓ Seçilen: {proformaGroups.find(pg => pg.id === formData.proforma_group_id)?.name}
                                     </div>
                                 </div>
                             )}
-                        </div>
-
-                        {/* Manual Group Addition */}
-                        <div className="bg-gray-50 dark:bg-gray-700 p-4 rounded-md">
-                            <div className="flex items-center justify-between mb-2">
-                                <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300">Yeni Proforma Grubu Ekle</h4>
-                            </div>
-                            <div className="text-xs text-gray-500 dark:text-gray-400 mb-2">
-                                Listede istediğiniz grup yoksa, yeni grup adını yazın:
-                            </div>
-                            <input
-                                type="text"
-                                placeholder="Örn: OLIVE OIL SHOWER GEL 1000ML"
-                                className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md text-sm"
-                                onKeyPress={(e) => {
-                                    if (e.key === 'Enter' && e.currentTarget.value.trim()) {
-                                        // Here you would call addProformaGroup
-                                        console.log('Add new group:', e.currentTarget.value);
-                                        e.currentTarget.value = '';
-                                    }
-                                }}
-                            />
                         </div>
 
                         
@@ -1373,6 +1456,63 @@ const ProductModal: React.FC<ProductModalProps> = ({ product, series, proformaGr
                                 >
                                     <Plus className="w-4 h-4 mr-2" />
                                     Seri Ekle
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Yeni Proforma Grubu Ekleme Modal */}
+            {showAddProformaGroupModal && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60]">
+                    <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-md">
+                        <div className="flex items-center justify-between mb-6">
+                            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                                Yeni Proforma Grubu Ekle
+                            </h3>
+                            <button
+                                onClick={() => setShowAddProformaGroupModal(false)}
+                                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                    Grup Adı *
+                                </label>
+                                <input
+                                    type="text"
+                                    value={newProformaGroupData.name}
+                                    onChange={(e) => setNewProformaGroupData({ ...newProformaGroupData, name: e.target.value })}
+                                    placeholder="Örn: OLIVE OIL SHOWER GEL 750ML"
+                                    className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md"
+                                    required
+                                />
+                                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                    Bu isim direkt olarak proforma belgesinde görünecektir.
+                                </p>
+                            </div>
+
+                            <div className="flex justify-end space-x-3 pt-4">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowAddProformaGroupModal(false)}
+                                    className="px-4 py-2 text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700"
+                                >
+                                    İptal
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={handleAddProformaGroup}
+                                    disabled={!newProformaGroupData.name.trim()}
+                                    className="flex items-center px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                                >
+                                    <Plus className="w-4 h-4 mr-2" />
+                                    Grup Ekle
                                 </button>
                             </div>
                         </div>
