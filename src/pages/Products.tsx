@@ -77,8 +77,11 @@ const Products: React.FC = () => {
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
 
     // Fetch products and series
-    const fetchData = async () => {
+    const fetchData = async (preserveScroll = false) => {
         try {
+            // Save current scroll position if preserveScroll is true
+            const currentScrollY = preserveScroll ? window.scrollY : 0;
+            
             setLoading(true);
             
             // Fetch series
@@ -111,6 +114,14 @@ const Products: React.FC = () => {
 
             if (productsError) throw productsError;
             setProducts(productsData || []);
+            
+            // Restore scroll position after data update if preserveScroll is true
+            if (preserveScroll) {
+                // Use setTimeout to ensure DOM has updated
+                setTimeout(() => {
+                    window.scrollTo(0, currentScrollY);
+                }, 0);
+            }
         } catch (err: any) {
             setError(err.message);
         } finally {
@@ -240,8 +251,8 @@ const Products: React.FC = () => {
                 position: 'top-right',
             });
             
-            // Refresh data to show latest changes
-            await fetchData();
+            // Refresh data to show latest changes, preserving scroll position
+            await fetchData(true);
             setDeleteConfirmation({show: false, product: null});
         } catch (err: any) {
             toast.error(`Hata: ${err.message}`);
@@ -291,8 +302,8 @@ const Products: React.FC = () => {
                 position: 'top-right',
             });
             
-            // Refresh data to show latest changes
-            await fetchData();
+            // Refresh data to show latest changes, preserving scroll position
+            await fetchData(true);
             setSelectedProducts([]);
             setShowBulkDeleteConfirm(false);
         } catch (err: any) {
@@ -351,8 +362,8 @@ const Products: React.FC = () => {
                     duration: 5000
                 });
                 
-                // Ürün listesini yenile
-                await fetchData();
+                // Ürün listesini yenile, scroll pozisyonunu koruyarak
+                await fetchData(true);
             }
 
             if (errors.length > 0) {
@@ -644,8 +655,8 @@ const Products: React.FC = () => {
                     groupsLoading={groupsLoading}
                     onSave={handleSaveProduct}
           onClose={async () => {
-            // Refresh data when modal is closed
-            await fetchData();
+            // Refresh data when modal is closed, preserving scroll position
+            await fetchData(true);
             setShowAddModal(false);
             setEditingProduct(null);
           }}
