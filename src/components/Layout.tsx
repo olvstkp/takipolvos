@@ -42,7 +42,11 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     { path: '/settings', icon: Settings, label: 'Ayarlar' },
   ];
 
-  const isActive = (path: string) => location.pathname === path;
+  const isActive = (path: string) => {
+    if (path === '/' && location.pathname === '/') return true;
+    if (path !== '/' && location.pathname.startsWith(path)) return true;
+    return false;
+  };
 
   const toggleDarkMode = () => {
     setDarkMode(!darkMode);
