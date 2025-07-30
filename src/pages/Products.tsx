@@ -211,34 +211,8 @@ const Products: React.FC = () => {
                 });
             }
             
-            // Update local state instead of refetching
-            if (editingProduct) {
-                // Update existing product in local state
-                setProducts(prevProducts => 
-                    prevProducts.map(p => 
-                        p.id === editingProduct.id 
-                            ? { ...p, ...productData }
-                            : p
-                    )
-                );
-            } else if (productId) {
-                // Add new product to local state
-                const newProduct: Product = {
-                    id: productId,
-                    name: productData.name || '',
-                    series_id: productData.series_id || '',
-                    price_per_case: productData.price_per_case || 0,
-                    price_per_piece: productData.price_per_piece || 0,
-                    price_per_case_usd: productData.price_per_case_usd || 0,
-                    price_per_piece_usd: productData.price_per_piece_usd || 0,
-                    barcode: productData.barcode || '',
-                    is_active: productData.is_active ?? true,
-                    created_at: new Date().toISOString(),
-                    proforma_group_id: productData.proforma_group_id || undefined,
-                    series: series.find(s => s.id === productData.series_id)
-                };
-                setProducts(prevProducts => [newProduct, ...prevProducts]);
-            }
+            // Refresh data to show latest changes
+            await fetchData();
             
             setShowAddModal(false);
             setEditingProduct(null);
@@ -269,14 +243,8 @@ const Products: React.FC = () => {
                 position: 'top-right',
             });
             
-            // Update local state instead of refetching
-            setProducts(prevProducts => 
-                prevProducts.map(p => 
-                    p.id === deleteConfirmation.product!.id 
-                        ? { ...p, is_active: false }
-                        : p
-                )
-            );
+            // Refresh data to show latest changes
+            await fetchData();
             setDeleteConfirmation({show: false, product: null});
         } catch (err: any) {
             toast.error(`Hata: ${err.message}`);
@@ -326,14 +294,8 @@ const Products: React.FC = () => {
                 position: 'top-right',
             });
             
-            // Update local state instead of refetching
-            setProducts(prevProducts => 
-                prevProducts.map(p => 
-                    selectedProducts.includes(p.id)
-                        ? { ...p, is_active: false }
-                        : p
-                )
-            );
+            // Refresh data to show latest changes
+            await fetchData();
             setSelectedProducts([]);
             setShowBulkDeleteConfirm(false);
         } catch (err: any) {
