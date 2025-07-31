@@ -189,7 +189,9 @@ export const useProducts = () => {
                     // Mock size and product type data
                     product_type_id: typeAndSize.product_type_id,
                     size_value: typeAndSize.size_value,
-                    size_unit: typeAndSize.size_unit
+                    size_unit: typeAndSize.size_unit,
+                    // Add proforma_group_id from Supabase
+                    proforma_group_id: item.proforma_group_id
                 };
             });
 

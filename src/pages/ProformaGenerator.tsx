@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
-import { Plus, Trash2, FileText, Download, Printer, ChevronsRight, Package, ArrowLeft, ArrowRight, Check } from 'lucide-react';
+import { Plus, Trash2, Download, Printer, Package, ArrowLeft, ArrowRight, Check } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as XLSX from 'xlsx';
 import { Proforma, ProformaItem, Customer, Product, Pallet } from '../types/proforma';
@@ -766,15 +766,12 @@ const PackingCalculationTab: React.FC<{ packingData: any[] }> = ({ packingData }
     );
 };
 
-const PackingSummaryTab: React.FC<{ proformaData: Proforma, packingData: any[], products: Product[], productTypes: any[], proformaGroups: any[] }> = ({ proformaData, packingData, products, productTypes, proformaGroups }) => {
-    const totalNetKg = packingData.reduce((s, r) => s + r.total_kg, 0);
-    const totalGrossKg = packingData.reduce((s, r) => s + r.brut_kg, 0);
-    const totalCases = packingData.reduce((s, r) => s + r.cup_units, 0);
-    const totalPieces = packingData.reduce((s, r) => s + r.adet_pcs, 0);
+const PackingSummaryTab: React.FC<{ proformaData: Proforma, packingData: any[], products: Product[], productTypes: any[], proformaGroups: any[] }> = ({ proformaData, products, productTypes, proformaGroups }) => {
 
     // Format product name for packing list
     const formatProductName = (product: Product) => {
         const proformaGroup = proformaGroups.find(pg => pg.id === product.proforma_group_id);
+        
         if (proformaGroup) {
             return proformaGroup.name; // Already formatted like "OLIVE OIL SHOWER GEL 750ML"
         }
@@ -788,23 +785,97 @@ const PackingSummaryTab: React.FC<{ proformaData: Proforma, packingData: any[], 
         return `OLIVE OIL ${packingName} ${size}${unit}`;
     };
 
+    // Group items by proforma group for summary
+    const groupedByProformaGroup = useMemo(() => {
+        const groups: Record<string, {
+            groupName: string;
+            totalCases: number;
+            totalPieces: number;
+            totalNetWeight: number;
+            totalGrossWeight: number;
+            items: Array<{
+                item: ProformaItem;
+                product: Product;
+                netWeight: number;
+                grossWeight: number;
+            }>;
+        }> = {};
+
+        proformaData.items.forEach(item => {
+            const product = products.find(p => p.id === item.productId);
+            if (!product) return;
+
+            // Aynı proforma grubundaki ürünleri birleştirmek için sadece group_id kullan
+            const groupKey = product.proforma_group_id || `ungrouped_${product.id}`;
+            const groupName = formatProductName(product);
+            
+
+            
+            const netWeight = item.quantity * product.net_weight_kg_per_piece * (item.unit === 'case' ? product.piecesPerCase : 1);
+            
+            // Calculate gross weight using the same logic as packing calculations
+            const totalUnits = proformaData.items.reduce((sum, i) => {
+                const p = products.find(pr => pr.id === i.productId);
+                return p ? sum + i.quantity : sum;
+            }, 0);
+            
+            const totalPalletWeight = proformaData.shipment.pallets.length * proformaData.shipment.weight_per_pallet_kg;
+            const palletWeightPerUnit = totalUnits > 0 ? totalPalletWeight / totalUnits : 0;
+            const packaging_weight = product.packaging_weight_kg_per_case || 0;
+            const tarePerUnit = packaging_weight + palletWeightPerUnit;
+            const grossWeight = netWeight + (item.quantity * tarePerUnit);
+
+            if (!groups[groupKey]) {
+                groups[groupKey] = {
+                    groupName,
+                    totalCases: 0,
+                    totalPieces: 0,
+                    totalNetWeight: 0,
+                    totalGrossWeight: 0,
+                    items: []
+                };
+            }
+
+            groups[groupKey].totalCases += item.unit === 'case' ? item.quantity : 0;
+            groups[groupKey].totalPieces += item.quantity * (item.unit === 'case' ? product.piecesPerCase : 1);
+            groups[groupKey].totalNetWeight += netWeight;
+            groups[groupKey].totalGrossWeight += grossWeight;
+            groups[groupKey].items.push({
+                item,
+                product,
+                netWeight,
+                grossWeight
+            });
+        });
+
+        return groups;
+    }, [proformaData.items, products, proformaGroups, proformaData.shipment]);
+
+    // Calculate totals from grouped data
+    const groupedTotals = useMemo(() => {
+        const groups = Object.values(groupedByProformaGroup);
+        return {
+            totalCases: groups.reduce((sum, group) => sum + group.totalCases, 0),
+            totalPieces: groups.reduce((sum, group) => sum + group.totalPieces, 0),
+            totalNetKg: groups.reduce((sum, group) => sum + group.totalNetWeight, 0),
+            totalGrossKg: groups.reduce((sum, group) => sum + group.totalGrossWeight, 0)
+        };
+    }, [groupedByProformaGroup]);
+
     return (
         <div className="p-8">
             <div className="text-center mb-8"><h2 className="text-2xl font-bold text-gray-900 dark:text-white">PACKING LIST - ÖZET</h2></div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 <div>
                      <h3 className="text-lg font-semibold mb-4 border-b pb-2">Ürün Özetleri</h3>
-                    {proformaData.items.map((item, index) => {
-                        const product = products.find(p => p.id === item.productId);
-                        if (!product) return null;
-                        const netWeight = item.quantity * product.net_weight_kg_per_piece * (item.unit === 'case' ? product.piecesPerCase : 1);
+                    {Object.values(groupedByProformaGroup).map((group, index) => {
                         return (
                              <div key={index} className="mb-4 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-md">
-                                 <h4 className="font-bold text-blue-600 dark:text-blue-400">{formatProductName(product)}</h4>
-                                 <div className="flex justify-between text-sm mt-2"><span>Total Number of Cases:</span> <span className="font-medium">{item.unit === 'case' ? item.quantity : 0}</span></div>
-                                 <div className="flex justify-between text-sm"><span>Total number of {formatProductName(product).toLowerCase()}:</span> <span className="font-medium">{item.quantity * (item.unit === 'case' ? product.piecesPerCase : 1)}</span></div>
-                                 <div className="flex justify-between text-sm"><span>Net Weight:</span> <span className="font-medium">{netWeight.toFixed(2)} kg</span></div>
-                                 <div className="flex justify-between text-sm"><span>Gross Weight:</span> <span className="font-medium text-green-600">TBD</span></div>
+                                 <h4 className="font-bold text-blue-600 dark:text-blue-400">{group.groupName}</h4>
+                                 <div className="flex justify-between text-sm mt-2"><span>Total Number of Cases:</span> <span className="font-medium">{group.totalCases}</span></div>
+                                 <div className="flex justify-between text-sm"><span>Total number of {group.groupName.toLowerCase()}:</span> <span className="font-medium">{group.totalPieces}</span></div>
+                                 <div className="flex justify-between text-sm"><span>Net Weight:</span> <span className="font-medium">{group.totalNetWeight.toFixed(2)} kg</span></div>
+                                 <div className="flex justify-between text-sm"><span>Gross Weight:</span> <span className="font-medium text-green-600">{group.totalGrossWeight.toFixed(2)} kg</span></div>
                     </div>
                         )
                     })}
@@ -812,10 +883,10 @@ const PackingSummaryTab: React.FC<{ proformaData: Proforma, packingData: any[], 
                 <div className="p-4 bg-gray-100 dark:bg-gray-900/50 rounded-lg">
                     <h3 className="text-lg font-semibold mb-4 border-b pb-2">Genel Sevkiyat Özeti</h3>
                   <div className="space-y-2">
-                        <SummaryRow label="TOTAL NUMBER OF CASES" value={totalCases} />
-                        <SummaryRow label="TOTAL NUMBER OF SOAPS AND PRODUCTS" value={totalPieces} />
-                        <SummaryRow label="NET KG" value={totalNetKg.toFixed(2)} />
-                        <SummaryRow label="GROSS KG" value={totalGrossKg.toFixed(2)} />
+                        <SummaryRow label="TOTAL NUMBER OF CASES" value={groupedTotals.totalCases} />
+                        <SummaryRow label="TOTAL NUMBER OF SOAPS AND PRODUCTS" value={groupedTotals.totalPieces} />
+                        <SummaryRow label="NET KG" value={groupedTotals.totalNetKg.toFixed(2)} />
+                        <SummaryRow label="GROSS KG" value={groupedTotals.totalGrossKg.toFixed(2)} />
                         <SummaryRow label="NUMBER OF PALLETS" value={proformaData.shipment.pallets.length} />
                         {proformaData.shipment.pallets.map(p => (
                             <SummaryRow key={p.pallet_number} label={`PALLET - ${p.pallet_number}`} value={`${p.width_cm}x${p.length_cm}x${p.height_cm}`} />

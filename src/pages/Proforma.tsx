@@ -86,8 +86,10 @@ const Proforma: React.FC = () => {
     const [selectedStatus, setSelectedStatus] = useState<string>('all');
     const [showViewModal, setShowViewModal] = useState(false);
     const [showEditModal, setShowEditModal] = useState(false);
+    const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [selectedProforma, setSelectedProforma] = useState<ProformaDetail | null>(null);
     const [editingProforma, setEditingProforma] = useState<ProformaDetail | null>(null);
+    const [deletingProforma, setDeletingProforma] = useState<ProformaListItem | null>(null);
 
     const fetchProformas = async () => {
         try {
@@ -139,52 +141,78 @@ const Proforma: React.FC = () => {
 
     const fetchProformaDetail = async (proformaId: string): Promise<ProformaDetail | null> => {
         try {
-            // Önce proforma ve customer bilgilerini çek
-            const { data: proformaData, error: proformaError } = await supabase
-                .from('proformas')
-                .select(`
-                    *,
-                    customer:customers (
+            // Paralel sorgular - daha hızlı
+            const [proformaResult, itemsResult, palletsResult] = await Promise.all([
+                // Proforma + Customer
+                supabase
+                    .from('proformas')
+                    .select(`
+                        *,
+                        customer:customers (
+                            id,
+                            name,
+                            address,
+                            tax_id,
+                            contact_person,
+                            phone,
+                            phone2,
+                            email,
+                            delivery
+                        )
+                    `)
+                    .eq('id', proformaId)
+                    .single(),
+                
+                // Proforma Items
+                supabase
+                    .from('proforma_items')
+                    .select(`
                         id,
-                        name,
-                        address,
-                        tax_id,
-                        contact_person,
-                        phone,
-                        phone2,
-                        email,
-                        delivery
-                    )
-                `)
-                .eq('id', proformaId)
-                .single();
+                        product_id,
+                        description,
+                        quantity,
+                        unit_price,
+                        total,
+                        unit
+                    `)
+                    .eq('proforma_id', proformaId),
 
-            if (proformaError) {
-                console.error('Supabase error fetching proforma:', proformaError);
-                throw proformaError;
+                // Pallets
+                supabase
+                    .from('pallets')
+                    .select(`
+                        id,
+                        pallet_number,
+                        width_cm,
+                        length_cm,
+                        height_cm
+                    `)
+                    .eq('proforma_id', proformaId)
+            ]);
+
+            // Error kontrolü
+            if (proformaResult.error) {
+                console.error('Supabase error fetching proforma:', proformaResult.error);
+                throw proformaResult.error;
             }
 
-            // Sonra proforma items'ları ayrı çek
-            const { data: itemsData, error: itemsError } = await supabase
-                .from('proforma_items')
-                .select(`
-                    id,
-                    product_id,
-                    description,
-                    quantity,
-                    unit_price,
-                    total,
-                    unit
-                `)
-                .eq('proforma_id', proformaId);
-
-            if (itemsError) {
-                console.error('Supabase error fetching items:', itemsError);
-                throw itemsError;
+            if (itemsResult.error) {
+                console.error('Supabase error fetching items:', itemsResult.error);
+                throw itemsResult.error;
             }
 
-            // Product bilgilerini ayrı çek
-            const productIds = itemsData?.map(item => item.product_id).filter(Boolean) || [];
+            const proformaData = proformaResult.data;
+            const itemsData = itemsResult.data || [];
+            const palletsData = palletsResult.data || [];
+
+            // Customer data kontrolü
+            if (!proformaData?.customer) {
+                console.error('Customer data missing for proforma:', proformaId);
+                return null;
+            }
+
+            // Product bilgilerini paralel çek (sadece gerekli olanları)
+            const productIds = itemsData.map(item => item.product_id).filter(Boolean);
             let productsData: any[] = [];
             
             if (productIds.length > 0) {
@@ -204,49 +232,24 @@ const Proforma: React.FC = () => {
                     `)
                     .in('id', productIds);
 
-                if (productsError) {
-                    console.error('Supabase error fetching products:', productsError);
-                } else {
+                if (!productsError) {
                     productsData = products || [];
                 }
             }
 
-            // Pallet bilgilerini çek
-            const { data: palletsData, error: palletsError } = await supabase
-                .from('pallets')
-                .select(`
-                    id,
-                    pallet_number,
-                    width_cm,
-                    length_cm,
-                    height_cm
-                `)
-                .eq('proforma_id', proformaId);
-
-            if (palletsError) {
-                console.error('Supabase error fetching pallets:', palletsError);
-            }
-
-            // Customer data kontrolü
-            if (!proformaData?.customer) {
-                console.error('Customer data missing for proforma:', proformaId);
-                return null;
-            }
-
             // Verileri birleştir
-            const proformaItems = itemsData?.map(item => {
+            const proformaItems = itemsData.map(item => {
                 const product = productsData.find(p => p.id === item.product_id);
-                console.log('Item:', item.product_id, 'Product found:', !!product, 'Product name:', product?.name);
                 return {
                     ...item,
                     product: product || null
                 };
-            }) || [];
+            });
 
             const result: ProformaDetail = {
                 ...proformaData,
                 proforma_items: proformaItems,
-                pallets: palletsData || []
+                pallets: palletsData
             };
             
             return result;
@@ -257,62 +260,46 @@ const Proforma: React.FC = () => {
     };
 
     const handleView = async (proformaId: string) => {
-        const detail = await fetchProformaDetail(proformaId);
-        if (detail) {
-            setSelectedProforma(detail);
-            setShowViewModal(true);
+        const loadingToast = toast.loading('Proforma detayları yükleniyor...');
+        
+        try {
+            const detail = await fetchProformaDetail(proformaId);
+            if (detail) {
+                setSelectedProforma(detail);
+                setShowViewModal(true);
+                toast.success('Proforma detayları yüklendi!', { id: loadingToast });
+            } else {
+                toast.error('Proforma detayları yüklenemedi!', { id: loadingToast });
+            }
+        } catch (error) {
+            toast.error('Bir hata oluştu!', { id: loadingToast });
         }
     };
 
     const handleEdit = async (proformaId: string) => {
-        const detail = await fetchProformaDetail(proformaId);
-        if (detail) {
-            setEditingProforma(detail);
-            setShowEditModal(true);
+        const loadingToast = toast.loading('Proforma düzenleme için hazırlanıyor...');
+        
+        try {
+            const detail = await fetchProformaDetail(proformaId);
+            if (detail) {
+                setEditingProforma(detail);
+                setShowEditModal(true);
+                toast.success('Düzenleme modu hazır!', { id: loadingToast });
+            } else {
+                toast.error('Proforma detayları yüklenemedi!', { id: loadingToast });
+            }
+        } catch (error) {
+            toast.error('Bir hata oluştu!', { id: loadingToast });
         }
     };
 
     const handleDelete = async (proformaId: string) => {
         // Get proforma info for confirmation
         const proformaToDelete = proformas.find(p => p.id === proformaId);
-        const proformaName = proformaToDelete?.proforma_number || 'Bu proforma';
-
-        // Custom confirmation toast
-        toast((t) => (
-            <div className="flex flex-col space-y-3">
-                <div className="flex items-center space-x-2">
-                    <span className="text-lg">🗑️</span>
-                    <span className="font-medium">Proformayı Sil</span>
-                </div>
-                <p className="text-sm text-gray-600">
-                    <strong>"{proformaName}"</strong> proformasını silmek istediğinizden emin misiniz?
-                </p>
-                <div className="flex space-x-2 justify-end">
-                    <button
-                        onClick={() => toast.dismiss(t.id)}
-                        className="px-3 py-1 text-sm bg-gray-300 text-gray-700 rounded hover:bg-gray-400"
-                    >
-                        İptal
-                    </button>
-                    <button
-                        onClick={() => {
-                            toast.dismiss(t.id);
-                            performProformaDelete(proformaId);
-                        }}
-                        className="px-3 py-1 text-sm bg-red-500 text-white rounded hover:bg-red-600"
-                    >
-                        Sil
-                    </button>
-                </div>
-            </div>
-        ), {
-            duration: Infinity,
-            style: {
-                background: 'white',
-                color: 'black',
-                maxWidth: '400px',
-            }
-        });
+        if (proformaToDelete) {
+            setDeletingProforma(proformaToDelete);
+            setShowDeleteModal(true);
+        }
     };
 
     const performProformaDelete = async (proformaId: string) => {
@@ -402,7 +389,6 @@ const Proforma: React.FC = () => {
             const { error: proformaError } = await supabase
                 .from('proformas')
                 .update({
-                    customer_id: updatedData.customer_id,
                     issue_date: updatedData.issue_date,
                     validity_date: updatedData.validity_date,
                     payment_method: updatedData.payment_method,
@@ -605,6 +591,22 @@ const Proforma: React.FC = () => {
                         setEditingProforma(null);
                     }}
                     onSave={updateProforma}
+                />
+            )}
+
+            {/* Delete Confirmation Modal */}
+            {showDeleteModal && deletingProforma && (
+                <ProformaDeleteModal
+                    proforma={deletingProforma}
+                    onClose={() => {
+                        setShowDeleteModal(false);
+                        setDeletingProforma(null);
+                    }}
+                    onConfirm={(proformaId) => {
+                        setShowDeleteModal(false);
+                        setDeletingProforma(null);
+                        performProformaDelete(proformaId);
+                    }}
                 />
             )}
         </div>
@@ -972,10 +974,8 @@ interface ProformaEditModalProps {
 }
 
 const ProformaEditModal: React.FC<ProformaEditModalProps> = ({ proforma, onClose, onSave }) => {
-    const [customers, setCustomers] = useState<Customer[]>([]);
     const [products, setProducts] = useState<Product[]>([]);
     const [formData, setFormData] = useState({
-        customer_id: proforma.customer_id,
         issue_date: proforma.issue_date,
         validity_date: proforma.validity_date,
         payment_method: proforma.payment_method,
@@ -988,25 +988,24 @@ const ProformaEditModal: React.FC<ProformaEditModalProps> = ({ proforma, onClose
     const [weightPerPallet, setWeightPerPallet] = useState(proforma.weight_per_pallet_kg);
 
     useEffect(() => {
-        // Fetch customers and products
-        const fetchData = async () => {
-            const [customersRes, productsRes] = await Promise.all([
-                supabase.from('customers').select('*').eq('is_active', true),
-                supabase.from('products').select(`
+        // Fetch products only
+        const fetchProducts = async () => {
+            const { data: productsRes } = await supabase
+                .from('products')
+                .select(`
                     *,
                     series (
                         name,
                         pieces_per_case,
                         net_weight_kg_per_piece
                     )
-                `).eq('is_active', true)
-            ]);
+                `)
+                .eq('is_active', true);
 
-            if (customersRes.data) setCustomers(customersRes.data);
-            if (productsRes.data) setProducts(productsRes.data);
+            if (productsRes) setProducts(productsRes);
         };
 
-        fetchData();
+        fetchProducts();
     }, []);
 
     const handleSave = () => {
@@ -1118,17 +1117,12 @@ const ProformaEditModal: React.FC<ProformaEditModalProps> = ({ proforma, onClose
                             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                                 Müşteri
                             </label>
-                            <select
-                                value={formData.customer_id}
-                                onChange={(e) => setFormData({ ...formData, customer_id: e.target.value })}
-                                className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md"
-                            >
-                                {customers.map(customer => (
-                                    <option key={customer.id} value={customer.id}>
-                                        {customer.name}
-                                    </option>
-                                ))}
-                            </select>
+                            <div className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-600 text-gray-900 dark:text-white rounded-md">
+                                {proforma.customer.name}
+                            </div>
+                            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                Müşteri bilgisi düzenlenirken değiştirilemez
+                            </p>
                         </div>
 
                         <div>
@@ -1386,6 +1380,94 @@ const ProformaEditModal: React.FC<ProformaEditModalProps> = ({ proforma, onClose
                     >
                         <Save className="w-4 h-4 mr-2" />
                         Kaydet
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// Delete Confirmation Modal Component
+interface ProformaDeleteModalProps {
+    proforma: ProformaListItem;
+    onClose: () => void;
+    onConfirm: (proformaId: string) => void;
+}
+
+const ProformaDeleteModal: React.FC<ProformaDeleteModalProps> = ({ proforma, onClose, onConfirm }) => {
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-md mx-4 shadow-xl">
+                <div className="flex items-center justify-between mb-6">
+                    <div className="flex items-center space-x-3">
+                        <div className="flex-shrink-0 w-10 h-10 bg-red-100 dark:bg-red-900/30 rounded-full flex items-center justify-center">
+                            <Trash2 className="w-5 h-5 text-red-600 dark:text-red-400" />
+                        </div>
+                        <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                            Proformayı Sil
+                        </h3>
+                    </div>
+                    <button
+                        onClick={onClose}
+                        className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+                    >
+                        <X className="w-5 h-5" />
+                    </button>
+                </div>
+
+                <div className="mb-6">
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                        Aşağıdaki proformayı silmek istediğinizden emin misiniz?
+                    </p>
+                    
+                    <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4 border border-gray-200 dark:border-gray-600">
+                        <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Proforma:</span>
+                                <span className="text-sm font-semibold text-gray-900 dark:text-white">
+                                    {proforma.proforma_number}
+                                </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Müşteri:</span>
+                                <span className="text-sm text-gray-900 dark:text-white">
+                                    {proforma.customer_name}
+                                </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Tutar:</span>
+                                <span className="text-sm font-semibold text-green-600 dark:text-green-400">
+                                    €{proforma.total_amount.toFixed(2)}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div className="mt-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                        <div className="flex items-start space-x-2">
+                            <div className="flex-shrink-0 mt-0.5">
+                                <span className="text-red-500 dark:text-red-400">⚠️</span>
+                            </div>
+                            <p className="text-sm text-red-700 dark:text-red-300">
+                                <strong>Dikkat!</strong> Bu işlem geri alınamaz. Proforma ve tüm ilgili veriler kalıcı olarak silinecektir.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="flex justify-end space-x-3">
+                    <button
+                        onClick={onClose}
+                        className="px-4 py-2 text-gray-600 dark:text-gray-400 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors font-medium"
+                    >
+                        İptal
+                    </button>
+                    <button
+                        onClick={() => onConfirm(proforma.id)}
+                        className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors font-medium flex items-center space-x-2"
+                    >
+                        <Trash2 className="w-4 h-4" />
+                        <span>Sil</span>
                     </button>
                 </div>
             </div>
