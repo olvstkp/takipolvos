@@ -139,7 +139,8 @@ const Proforma: React.FC = () => {
 
     const fetchProformaDetail = async (proformaId: string): Promise<ProformaDetail | null> => {
         try {
-            const { data, error } = await supabase
+            // Önce proforma ve customer bilgilerini çek
+            const { data: proformaData, error: proformaError } = await supabase
                 .from('proformas')
                 .select(`
                     *,
@@ -153,51 +154,102 @@ const Proforma: React.FC = () => {
                         phone2,
                         email,
                         delivery
-                    ),
-                    proforma_items (
-                        id,
-                        product_id,
-                        description,
-                        quantity,
-                        unit_price,
-                        total,
-                        unit,
-                        products (
-                            id,
-                            name,
-                            series_id,
-                            price_per_case,
-                            price_per_piece,
-                            series (
-                                name,
-                                pieces_per_case,
-                                net_weight_kg_per_piece
-                            )
-                        )
-                    ),
-                    pallets (
-                        id,
-                        pallet_number,
-                        width_cm,
-                        length_cm,
-                        height_cm
                     )
                 `)
                 .eq('id', proformaId)
                 .single();
 
-            if (error) {
-                console.error('Supabase error:', error);
-                throw error;
+            if (proformaError) {
+                console.error('Supabase error fetching proforma:', proformaError);
+                throw proformaError;
             }
+
+            // Sonra proforma items'ları ayrı çek
+            const { data: itemsData, error: itemsError } = await supabase
+                .from('proforma_items')
+                .select(`
+                    id,
+                    product_id,
+                    description,
+                    quantity,
+                    unit_price,
+                    total,
+                    unit
+                `)
+                .eq('proforma_id', proformaId);
+
+            if (itemsError) {
+                console.error('Supabase error fetching items:', itemsError);
+                throw itemsError;
+            }
+
+            // Product bilgilerini ayrı çek
+            const productIds = itemsData?.map(item => item.product_id).filter(Boolean) || [];
+            let productsData: any[] = [];
             
+            if (productIds.length > 0) {
+                const { data: products, error: productsError } = await supabase
+                    .from('products')
+                    .select(`
+                        id,
+                        name,
+                        series_id,
+                        price_per_case,
+                        price_per_piece,
+                        series (
+                            name,
+                            pieces_per_case,
+                            net_weight_kg_per_piece
+                        )
+                    `)
+                    .in('id', productIds);
+
+                if (productsError) {
+                    console.error('Supabase error fetching products:', productsError);
+                } else {
+                    productsData = products || [];
+                }
+            }
+
+            // Pallet bilgilerini çek
+            const { data: palletsData, error: palletsError } = await supabase
+                .from('pallets')
+                .select(`
+                    id,
+                    pallet_number,
+                    width_cm,
+                    length_cm,
+                    height_cm
+                `)
+                .eq('proforma_id', proformaId);
+
+            if (palletsError) {
+                console.error('Supabase error fetching pallets:', palletsError);
+            }
+
             // Customer data kontrolü
-            if (!data?.customer) {
+            if (!proformaData?.customer) {
                 console.error('Customer data missing for proforma:', proformaId);
                 return null;
             }
+
+            // Verileri birleştir
+            const proformaItems = itemsData?.map(item => {
+                const product = productsData.find(p => p.id === item.product_id);
+                console.log('Item:', item.product_id, 'Product found:', !!product, 'Product name:', product?.name);
+                return {
+                    ...item,
+                    product: product || null
+                };
+            }) || [];
+
+            const result: ProformaDetail = {
+                ...proformaData,
+                proforma_items: proformaItems,
+                pallets: palletsData || []
+            };
             
-            return data as ProformaDetail;
+            return result;
         } catch (err: any) {
             console.error('Error fetching proforma detail:', err);
             return null;
@@ -835,7 +887,7 @@ const ProformaViewModal: React.FC<ProformaViewModalProps> = ({
                                 {proforma.proforma_items.map((item, index) => (
                                     <tr key={index}>
                                         <td className="px-4 py-2 text-sm text-gray-900 dark:text-white border-r border-gray-300 dark:border-gray-600">
-                                            {item.product?.name || 'Ürün Bulunamadı'}
+                                            {item.product?.name || item.description || 'Ürün Bulunamadı'}
                                         </td>
                                         <td className="px-4 py-2 text-sm text-gray-900 dark:text-white border-r border-gray-300 dark:border-gray-600">
                                             {item.quantity}
