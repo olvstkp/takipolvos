@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
-import { Plus, Trash2, Download, Printer, Package, ArrowLeft, ArrowRight, Check } from 'lucide-react';
+import { Plus, Trash2, Download, Printer, Package, ArrowLeft, ArrowRight, Check, Search } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as XLSX from 'xlsx';
 import { Proforma, ProformaItem, Customer, Product, Pallet } from '../types/proforma';
@@ -579,14 +579,11 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({ proformaData, customer, custome
                         {proformaData.items.map((item, index) => (
                            <tr key={index}>
                                <td className="td-cell">
-                                   <select 
-                                        value={item.productId} 
-                                        onChange={(e) => onItemChange(index, { productId: e.target.value })}
-                                        className="w-full p-2 border-0 bg-transparent text-gray-900 dark:text-white focus:ring-0"
-                                    >
-                                       <option value="">Ürün Seçiniz...</option>
-                                       {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                                   </select>
+                                   <ProductSelector
+                                       products={products}
+                                       selectedProductId={item.productId}
+                                       onProductSelect={(productId) => onItemChange(index, { productId })}
+                                   />
                                </td>
                                <td className="td-cell">
                         <input
@@ -911,5 +908,158 @@ const SummaryRow: React.FC<{ label: string, value: string | number }> = ({ label
         <span className="text-gray-900 dark:text-white">{value}</span>
     </div>
 );
+
+// Product Selector Component with Modal Dialog
+interface ProductSelectorProps {
+    products: Product[];
+    selectedProductId: string;
+    onProductSelect: (productId: string) => void;
+}
+
+const ProductSelector: React.FC<ProductSelectorProps> = ({ products, selectedProductId, onProductSelect }) => {
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [searchTerm, setSearchTerm] = useState('');
+
+    const selectedProduct = products.find(p => p.id === selectedProductId);
+
+    const filteredProducts = useMemo(() => {
+        if (!searchTerm) return products;
+        return products.filter(product => 
+            product.name.toLowerCase().includes(searchTerm.toLowerCase())
+        );
+    }, [products, searchTerm]);
+
+    const handleProductSelect = (product: Product) => {
+        onProductSelect(product.id);
+        setIsModalOpen(false);
+        setSearchTerm('');
+    };
+
+    const handleClose = () => {
+        setIsModalOpen(false);
+        setSearchTerm('');
+    };
+
+    return (
+        <>
+            {/* Trigger Button */}
+            <button
+                type="button"
+                onClick={() => setIsModalOpen(true)}
+                className="w-full p-2 border-0 bg-transparent text-gray-900 dark:text-white focus:ring-0 text-left flex items-center justify-between hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors border border-gray-300 dark:border-gray-600"
+            >
+                <span className={selectedProduct ? 'text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400'}>
+                    {selectedProduct ? selectedProduct.name : 'Ürün Seçiniz...'}
+                </span>
+                <Search className="w-4 h-4 text-gray-400" />
+            </button>
+
+            {/* Modal Dialog */}
+            {isModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50">
+                    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+                        {/* Modal Header */}
+                        <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-600">
+                            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                                Ürün Seçiniz
+                            </h3>
+                            <button
+                                onClick={handleClose}
+                                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition-colors"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        {/* Search Input */}
+                        <div className="p-6 border-b border-gray-200 dark:border-gray-600">
+                            <div className="relative">
+                                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                                <input
+                                    type="text"
+                                    placeholder="Ürün ara..."
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                    className="w-full pl-10 pr-4 py-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                                    autoFocus
+                                />
+                            </div>
+                            {searchTerm && (
+                                <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
+                                    {filteredProducts.length} ürün bulundu
+                                </p>
+                            )}
+                        </div>
+
+                        {/* Products Grid */}
+                        <div className="flex-1 overflow-y-auto p-6">
+                            {filteredProducts.length > 0 ? (
+                                <div className="grid grid-cols-1 gap-3">
+                                    {filteredProducts.map((product) => (
+                                        <button
+                                            key={product.id}
+                                            type="button"
+                                            onClick={() => handleProductSelect(product)}
+                                            className={`p-4 rounded-lg border-2 text-left transition-all hover:shadow-md ${
+                                                product.id === selectedProductId 
+                                                    ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 shadow-md' 
+                                                    : 'border-gray-200 dark:border-gray-600 hover:border-blue-300 dark:hover:border-blue-400'
+                                            }`}
+                                        >
+                                            <div className="flex items-center justify-between">
+                                                <div className="flex-1">
+                                                    <h4 className="font-medium text-gray-900 dark:text-white mb-1">
+                                                        {product.name}
+                                                    </h4>
+                                                    <div className="flex items-center gap-4 text-sm text-gray-500 dark:text-gray-400">
+                                                        <span>Koli: €{product.pricePerCase?.toFixed(2)}</span>
+                                                        <span>Adet: €{product.pricePerPiece?.toFixed(2)}</span>
+                                                        <span>ID: {product.id.substring(0, 8)}</span>
+                                                    </div>
+                                                </div>
+                                                {product.id === selectedProductId && (
+                                                    <Check className="w-5 h-5 text-blue-500" />
+                                                )}
+                                            </div>
+                                        </button>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="flex flex-col items-center justify-center py-12 text-gray-500 dark:text-gray-400">
+                                    <Search className="w-12 h-12 mb-4 opacity-50" />
+                                    <h4 className="text-lg font-medium mb-2">Ürün bulunamadı</h4>
+                                    <p className="text-sm text-center">
+                                        {searchTerm 
+                                            ? `"${searchTerm}" arama terimi için sonuç bulunamadı`
+                                            : 'Henüz hiç ürün eklenmemiş'
+                                        }
+                                    </p>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Modal Footer */}
+                        <div className="flex items-center justify-end gap-3 p-6 border-t border-gray-200 dark:border-gray-600">
+                            <button
+                                onClick={handleClose}
+                                className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors"
+                            >
+                                İptal
+                            </button>
+                            {selectedProduct && (
+                                <button
+                                    onClick={handleClose}
+                                    className="px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-md transition-colors"
+                                >
+                                    Seçili Ürünü Kullan
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+        </>
+    );
+};
 
 export default ProformaGenerator;

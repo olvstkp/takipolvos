@@ -1225,56 +1225,89 @@ const ProformaEditModal: React.FC<ProformaEditModalProps> = ({ proforma, onClose
 
                     <div className="space-y-4">
                         {items.map((item, index) => (
-                            <div key={index} className="flex items-center space-x-4 p-4 border border-gray-300 dark:border-gray-600 rounded-md">
-                                <select
-                                    value={item.product_id}
-                                    onChange={(e) => updateItem(index, 'product_id', e.target.value)}
-                                    className="flex-1 p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md"
-                                >
-                                    <option value="">Ürün seçin...</option>
-                                    {products.map(product => (
-                                        <option key={product.id} value={product.id}>
-                                            {product.name}
-                                        </option>
-                                    ))}
-                                </select>
-
-                                <input
-                                    type="number"
-                                    placeholder="Miktar"
-                                    value={item.quantity}
-                                    onChange={(e) => updateItem(index, 'quantity', Number(e.target.value))}
-                                    className="w-24 p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md"
-                                />
-
-                                <select
-                                    value={item.unit}
-                                    onChange={(e) => updateItem(index, 'unit', e.target.value)}
-                                    className="w-24 p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md"
-                                >
-                                    <option value="case">Koli</option>
-                                    <option value="piece">Adet</option>
-                                </select>
-
-                                <input
-                                    type="number"
-                                    step="0.01"
-                                    placeholder="Birim Fiyat"
-                                    value={item.unit_price}
-                                    onChange={(e) => updateItem(index, 'unit_price', Number(e.target.value))}
-                                    className="w-32 p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md"
-                                />
-
-                                <span className="w-32 text-sm text-gray-900 dark:text-white">
-                                    €{item.total.toFixed(2)}
-                                </span>
-
+                            <div key={index} className="relative p-4 border border-gray-300 dark:border-gray-600 rounded-md">
+                                {/* Delete Button - Top Right */}
                                 <button
                                     onClick={() => removeItem(index)}
-                                    className="p-2 text-red-600 hover:bg-red-100 dark:hover:bg-red-900 rounded-md"
+                                    className="absolute top-2 right-2 p-1.5 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-colors"
+                                    title="Ürünü Sil"
                                 >
                                     <Trash2 className="w-4 h-4" />
                                 </button>
+
+                                {/* Product Row */}
+                                <div className="grid grid-cols-5 gap-4 pr-8">
+                                    <div className="col-span-2">
+                                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                                            Ürün
+                                        </label>
+                                        <select
+                                            value={item.product_id}
+                                            onChange={(e) => updateItem(index, 'product_id', e.target.value)}
+                                            className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md text-sm"
+                                        >
+                                            <option value="">Ürün seçin...</option>
+                                            {products.map(product => (
+                                                <option key={product.id} value={product.id}>
+                                                    {product.name}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                                            Miktar
+                                        </label>
+                                        <input
+                                            type="number"
+                                            placeholder="0"
+                                            value={item.quantity}
+                                            onChange={(e) => updateItem(index, 'quantity', Number(e.target.value))}
+                                            className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md text-sm"
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                                            Birim
+                                        </label>
+                                        <select
+                                            value={item.unit}
+                                            onChange={(e) => updateItem(index, 'unit', e.target.value)}
+                                            className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md text-sm"
+                                        >
+                                            <option value="case">Koli</option>
+                                            <option value="piece">Adet</option>
+                                        </select>
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                                            Birim Fiyat
+                                        </label>
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            placeholder="0.00"
+                                            value={item.unit_price}
+                                            onChange={(e) => updateItem(index, 'unit_price', Number(e.target.value))}
+                                            className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md text-sm"
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* Total Row */}
+                                <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-600">
+                                    <div className="flex justify-between items-center">
+                                        <span className="text-sm text-gray-500 dark:text-gray-400">
+                                            Toplam:
+                                        </span>
+                                        <span className="text-lg font-semibold text-gray-900 dark:text-white">
+                                            €{item.total.toFixed(2)}
+                                        </span>
+                                    </div>
+                                </div>
                             </div>
                         ))}
                     </div>
