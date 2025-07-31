@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { FileText, Plus, Eye, Edit, Download, Trash2, X, Save, Calendar, User, DollarSign, Package } from 'lucide-react';
+import { FileText, Plus, Eye, Edit, Download, Trash2, X, Save, Calendar, User, DollarSign, Package, Settings } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { supabase } from '../lib/supabase';
 import ProformaGenerator from './ProformaGenerator';
@@ -90,6 +90,7 @@ const Proforma: React.FC = () => {
     const [selectedProforma, setSelectedProforma] = useState<ProformaDetail | null>(null);
     const [editingProforma, setEditingProforma] = useState<ProformaDetail | null>(null);
     const [deletingProforma, setDeletingProforma] = useState<ProformaListItem | null>(null);
+    const [showSettingsModal, setShowSettingsModal] = useState(false);
 
     const fetchProformas = async () => {
         try {
@@ -513,6 +514,14 @@ const Proforma: React.FC = () => {
             {/* Header */}
             <div className="flex items-center justify-between">
                 <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Proforma Yönetimi</h1>
+                <button
+                    onClick={() => setShowSettingsModal(true)}
+                    className="flex items-center px-4 py-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg transition-colors"
+                    title="Proforma Ayarları"
+                >
+                    <Settings className="w-4 h-4 mr-2" />
+                    Proforma Ayarları
+                </button>
             </div>
 
             {/* Tabs */}
@@ -607,6 +616,13 @@ const Proforma: React.FC = () => {
                         setDeletingProforma(null);
                         performProformaDelete(proformaId);
                     }}
+                />
+            )}
+
+            {/* Settings Modal */}
+            {showSettingsModal && (
+                <ProformaSettingsModal
+                    onClose={() => setShowSettingsModal(false)}
                 />
             )}
         </div>
@@ -1501,6 +1517,349 @@ const ProformaDeleteModal: React.FC<ProformaDeleteModalProps> = ({ proforma, onC
                     >
                         <Trash2 className="w-4 h-4" />
                         <span>Sil</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// Settings Modal Component
+interface ProformaSettingsModalProps {
+    onClose: () => void;
+}
+
+const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }) => {
+    const [logo, setLogo] = useState<File | null>(null);
+    const [logoPreview, setLogoPreview] = useState<string | null>(null);
+    const [uploading, setUploading] = useState(false);
+
+    // Mevcut logoyu yükle
+    useEffect(() => {
+        const loadLogo = async () => {
+            try {
+                // Supabase'den logo URL'sini çek
+                const { data, error } = await supabase
+                    .from('company_logo')
+                    .select('url')
+                    .order('uploaded_at', { ascending: false })
+                    .limit(1)
+                    .single();
+
+                if (data && !error) {
+                    setLogoPreview(data.url);
+                } else {
+                    // Fallback: localStorage'dan yükle
+                    const savedLogo = localStorage.getItem('proforma_logo');
+                    if (savedLogo) {
+                        setLogoPreview(savedLogo);
+                    }
+                }
+            } catch (error) {
+                console.error('Logo yükleme hatası:', error);
+                // Hata durumunda localStorage'dan yükle
+                const savedLogo = localStorage.getItem('proforma_logo');
+                if (savedLogo) {
+                    setLogoPreview(savedLogo);
+                }
+            }
+        };
+
+        loadLogo();
+    }, []);
+
+    const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (file && file.type.startsWith('image/')) {
+            setLogo(file);
+            
+            // Preview oluştur
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const result = e.target?.result as string;
+                setLogoPreview(result);
+            };
+            reader.readAsDataURL(file);
+        } else {
+            toast.error('Lütfen geçerli bir resim dosyası seçin (.png, .jpg, .jpeg)');
+        }
+    };
+
+    const handleSaveLogo = async () => {
+        if (!logo) {
+            toast.error('Lütfen bir logo seçin');
+            return;
+        }
+
+        try {
+            setUploading(true);
+            
+            // 1. Storage bucket'ını kontrol et ve oluştur
+            const { data: buckets, error: listError } = await supabase.storage.listBuckets();
+            
+            if (listError) {
+                console.error('Bucket listesi çekme hatası:', listError);
+            }
+            
+            const companyAssetsBucket = buckets?.find(bucket => bucket.name === 'company-assets');
+            
+            if (!companyAssetsBucket) {
+                // Bucket yoksa oluştur
+                const { error: bucketError } = await supabase.storage.createBucket('company-assets', {
+                    public: true,
+                    allowedMimeTypes: ['image/png', 'image/jpeg', 'image/jpg'],
+                    fileSizeLimit: 5242880 // 5MB
+                });
+                
+                if (bucketError) {
+                    console.error('Bucket oluşturma hatası:', bucketError);
+                    // Bucket oluşturamıyorsak yine de devam et, belki zaten var
+                }
+            }
+
+            // 2. Dosya adını belirle
+            const fileExt = logo.name.split('.').pop();
+            const fileName = `company-logo.${fileExt}`;
+            
+            // 3. Mevcut logoyu sil (varsa)
+            await supabase.storage
+                .from('company-assets')
+                .remove([fileName]);
+
+            // 4. Yeni logoyu yükle
+            const { data: uploadData, error: uploadError } = await supabase.storage
+                .from('company-assets')
+                .upload(fileName, logo, {
+                    cacheControl: '3600',
+                    upsert: true
+                });
+
+            if (uploadError) {
+                console.error('Upload hatası detayı:', uploadError);
+                
+                // Eğer bucket hala yok hatası alıyorsak, manuel oluşturmayı dene
+                if (uploadError.message?.includes('Bucket not found')) {
+                    toast.error('Storage bucket bulunamadı. Lütfen Supabase panelinden "company-assets" bucket\'ını oluşturun.');
+                    return;
+                }
+                
+                throw uploadError;
+            }
+
+            // 5. Public URL al
+            const { data: { publicUrl } } = supabase.storage
+                .from('company-assets')
+                .getPublicUrl(fileName);
+
+            // 6. Tabloyu güncelle (önceki kayıtları sil, yeni kayıt ekle)
+            await supabase
+                .from('company_logo')
+                .delete()
+                .neq('id', '00000000-0000-0000-0000-000000000000'); // Tüm kayıtları sil
+
+            const { error: insertError } = await supabase
+                .from('company_logo')
+                .insert([{ url: publicUrl }]);
+
+            if (insertError) {
+                throw insertError;
+            }
+
+            // 7. Backup için localStorage'a da kaydet
+            localStorage.setItem('proforma_logo', publicUrl);
+
+            toast.success('Logo başarıyla kaydedildi!');
+            onClose();
+            
+        } catch (error: any) {
+            console.error('Logo kaydetme hatası:', error);
+            
+            // Storage hatası varsa, fallback olarak base64'ü tabloya kaydet
+            try {
+                console.log('Storage hatası nedeniyle base64 fallback deneniyor...');
+                
+                // Logo'yu base64'e çevir
+                const reader = new FileReader();
+                reader.onload = async (e) => {
+                    const base64Data = e.target?.result as string;
+                    
+                    try {
+                        // Tabloyu güncelle (base64 data URL olarak)
+                        await supabase
+                            .from('company_logo')
+                            .delete()
+                            .neq('id', '00000000-0000-0000-0000-000000000000');
+
+                        const { error: insertError } = await supabase
+                            .from('company_logo')
+                            .insert([{ url: base64Data }]);
+
+                        if (insertError) {
+                            throw insertError;
+                        }
+
+                        // Backup için localStorage'a da kaydet
+                        localStorage.setItem('proforma_logo', base64Data);
+                        setLogoPreview(base64Data);
+
+                        toast.success('Logo başarıyla kaydedildi! (Base64 formatında)');
+                        onClose();
+                    } catch (fallbackError: any) {
+                        console.error('Fallback kaydetme hatası:', fallbackError);
+                        toast.error(`Logo kaydedilemedi: ${fallbackError.message}`);
+                    } finally {
+                        setUploading(false);
+                    }
+                };
+                reader.readAsDataURL(logo);
+                return; // Ana catch bloğunu bitir
+            } catch (fallbackError) {
+                console.error('Fallback deneme hatası:', fallbackError);
+                toast.error(`Logo kaydedilirken hata: ${error.message || error}`);
+            }
+        } finally {
+            if (uploading) {
+                setUploading(false);
+            }
+        }
+    };
+
+    const handleRemoveLogo = async () => {
+        try {
+            // 1. Storage'dan sil
+            await supabase.storage
+                .from('company-assets')
+                .remove(['company-logo.png', 'company-logo.jpg', 'company-logo.jpeg']);
+
+            // 2. Tablodan sil
+            await supabase
+                .from('company_logo')
+                .delete()
+                .neq('id', '00000000-0000-0000-0000-000000000000'); // Tüm kayıtları sil
+
+            // 3. localStorage'dan sil
+            localStorage.removeItem('proforma_logo');
+            
+            setLogo(null);
+            setLogoPreview(null);
+            toast.success('Logo başarıyla kaldırıldı');
+        } catch (error) {
+            console.error('Logo silme hatası:', error);
+            // Hata olsa bile localStorage'dan sil
+            localStorage.removeItem('proforma_logo');
+            setLogo(null);
+            setLogoPreview(null);
+            toast.success('Logo yerel olarak kaldırıldı');
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-md mx-4 shadow-xl">
+                <div className="flex items-center justify-between mb-6">
+                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center">
+                        <Settings className="w-5 h-5 mr-2" />
+                        Proforma Ayarları
+                    </h3>
+                    <button
+                        onClick={onClose}
+                        className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+                    >
+                        <X className="w-5 h-5" />
+                    </button>
+                </div>
+
+                <div className="space-y-6">
+                    {/* Logo Upload */}
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+                            Şirket Logosu
+                        </label>
+                        
+                        {/* Logo Preview */}
+                        {logoPreview && (
+                            <div className="mb-4 p-4 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
+                                <div className="text-center">
+                                    <img 
+                                        src={logoPreview} 
+                                        alt="Logo Önizleme" 
+                                        className="max-h-32 max-w-full mx-auto object-contain"
+                                    />
+                                    <p className="mt-2 text-xs text-gray-500">Mevcut Logo</p>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* File Input */}
+                        <div className="space-y-3">
+                            <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 dark:hover:bg-gray-800 dark:bg-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:hover:border-gray-500">
+                                <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                                    <Package className="w-8 h-8 mb-3 text-gray-400" />
+                                    <p className="mb-2 text-sm text-gray-500 dark:text-gray-400">
+                                        <span className="font-semibold">Logo yüklemek için tıklayın</span>
+                                    </p>
+                                    <p className="text-xs text-gray-500 dark:text-gray-400">PNG, JPG, JPEG (Max. 5MB)</p>
+                                </div>
+                                <input
+                                    type="file"
+                                    className="hidden"
+                                    accept="image/png,image/jpeg,image/jpg"
+                                    onChange={handleLogoChange}
+                                />
+                            </label>
+
+                            {logo && (
+                                <div className="text-sm text-gray-600 dark:text-gray-400">
+                                    Seçilen dosya: {logo.name}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Logo Actions */}
+                        <div className="mt-4 flex space-x-3">
+                            <button
+                                onClick={handleSaveLogo}
+                                disabled={!logo && !logoPreview || uploading}
+                                className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-lg transition-colors font-medium flex items-center justify-center"
+                            >
+                                {uploading ? (
+                                    <>
+                                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                                        Kaydediliyor...
+                                    </>
+                                ) : (
+                                    <>
+                                        <Save className="w-4 h-4 mr-2" />
+                                        Kaydet
+                                    </>
+                                )}
+                            </button>
+
+                            {logoPreview && (
+                                <button
+                                    onClick={handleRemoveLogo}
+                                    className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors font-medium flex items-center"
+                                >
+                                    <Trash2 className="w-4 h-4 mr-2" />
+                                    Kaldır
+                                </button>
+                            )}
+                        </div>
+
+                        <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+                            <p className="text-xs text-blue-700 dark:text-blue-300">
+                                <strong>Bilgi:</strong> Logo Excel dosyanızın A1 hücresinde (sol üst köşede) görünecektir. Logo yüklendiğinde şirket adres bilgileri aşağıya kayacaktır.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="flex justify-end space-x-3 mt-6">
+                    <button
+                        onClick={onClose}
+                        className="px-4 py-2 text-gray-600 dark:text-gray-400 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors font-medium"
+                    >
+                        Kapat
                     </button>
                 </div>
             </div>
