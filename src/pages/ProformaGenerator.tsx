@@ -15,6 +15,7 @@ interface ProformaGeneratorProps {
 const ProformaGenerator: React.FC<ProformaGeneratorProps> = ({ onSuccess }) => {
     const [currentStep, setCurrentStep] = useState(0);
     const [currency, setCurrency] = useState<'EUR' | 'USD'>('EUR');
+    const [selectedCompany, setSelectedCompany] = useState<string>('DASPI');
     const steps = ['invoice', 'packing-calculation', 'packing-summary'];
     const stepTitles = {
         'invoice': 'Invoice Bilgileri',
@@ -87,6 +88,10 @@ const ProformaGenerator: React.FC<ProformaGeneratorProps> = ({ onSuccess }) => {
             console.error('Error in fetchNextProformaNumber:', error);
             setProformaData(prev => ({ ...prev, proformaNumber: 'PROF-001' }));
         }
+        
+        // Şirket seçimini localStorage'dan yükle
+        const savedCompany = localStorage.getItem('selected_company') || 'DASPI';
+        setSelectedCompany(savedCompany);
     }, []);
 
     const goToNextStep = () => setCurrentStep(prev => Math.min(prev + 1, steps.length - 1));
@@ -147,7 +152,8 @@ const ProformaGenerator: React.FC<ProformaGeneratorProps> = ({ onSuccess }) => {
                 products,
                 proformaGroups,
                 packingListCalculations,
-                currency
+                currency,
+                selectedCompany
             });
 
             toast.dismiss();
@@ -383,6 +389,32 @@ const ProformaGenerator: React.FC<ProformaGeneratorProps> = ({ onSuccess }) => {
       <div className="flex items-center justify-between">
                 <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Proforma Oluşturucu</h1>
         <div className="flex space-x-3">
+                    {/* Şirket Seçimi */}
+                    <div className="flex items-center space-x-2">
+                        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Şirket:</span>
+                        <div className="flex rounded-md overflow-hidden">
+                            <button
+                                onClick={() => setSelectedCompany('DASPI')}
+                                className={`px-3 py-2 text-sm font-medium transition-colors ${
+                                    selectedCompany === 'DASPI'
+                                        ? 'bg-blue-600 text-white'
+                                        : 'bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500'
+                                }`}
+                            >
+                                DASPI
+                            </button>
+                            <button
+                                onClick={() => setSelectedCompany('OLIVOS')}
+                                className={`px-3 py-2 text-sm font-medium transition-colors ${
+                                    selectedCompany === 'OLIVOS'
+                                        ? 'bg-blue-600 text-white'
+                                        : 'bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500'
+                                }`}
+                            >
+                                OLIVOS
+                            </button>
+                        </div>
+                    </div>
                     <button onClick={generateExcel} className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"><Download className="w-4 h-4 mr-2" /> Excel Olarak İndir</button>
                     <button onClick={() => window.print()} className="flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"><Printer className="w-4 h-4 mr-2" /> Yazdır</button>
         </div>

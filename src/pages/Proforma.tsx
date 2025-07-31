@@ -1533,21 +1533,27 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
     const [logo, setLogo] = useState<File | null>(null);
     const [logoPreview, setLogoPreview] = useState<string | null>(null);
     const [uploading, setUploading] = useState(false);
+    const [selectedCompany, setSelectedCompany] = useState<string>('DASPI');
+    const [companyAddress, setCompanyAddress] = useState<string>('');
 
     // Mevcut logoyu yükle
     useEffect(() => {
         const loadLogo = async () => {
             try {
-                // Supabase'den logo URL'sini çek
+                // Mevcut şirket seçimini yükle
+                const savedCompany = localStorage.getItem('selected_company') || 'DASPI';
+                setSelectedCompany(savedCompany);
+
+                // Seçili şirketin logo ve adresini çek
                 const { data, error } = await supabase
                     .from('company_logo')
-                    .select('url')
-                    .order('uploaded_at', { ascending: false })
-                    .limit(1)
+                    .select('logo_url, address, company_name')
+                    .eq('company_name', savedCompany)
                     .single();
 
                 if (data && !error) {
-                    setLogoPreview(data.url);
+                    setLogoPreview(data.logo_url);
+                    setCompanyAddress(data.address || '');
                 } else {
                     // Fallback: localStorage'dan yükle
                     const savedLogo = localStorage.getItem('proforma_logo');
@@ -1567,6 +1573,27 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
 
         loadLogo();
     }, []);
+
+    const handleCompanyChange = async (companyName: string) => {
+        setSelectedCompany(companyName);
+        localStorage.setItem('selected_company', companyName);
+
+        try {
+            // Yeni şirketin bilgilerini çek
+            const { data, error } = await supabase
+                .from('company_logo')
+                .select('logo_url, address')
+                .eq('company_name', companyName)
+                .single();
+
+            if (data && !error) {
+                setLogoPreview(data.logo_url);
+                setCompanyAddress(data.address || '');
+            }
+        } catch (error) {
+            console.error('Şirket değiştirme hatası:', error);
+        }
+    };
 
     const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -1651,15 +1678,16 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
                 .from('company-assets')
                 .getPublicUrl(fileName);
 
-            // 6. Tabloyu güncelle (önceki kayıtları sil, yeni kayıt ekle)
-            await supabase
+            // 6. Seçili şirketin kaydını güncelle
+            const { error: updateError } = await supabase
                 .from('company_logo')
-                .delete()
-                .neq('id', '00000000-0000-0000-0000-000000000000'); // Tüm kayıtları sil
+                .update({ 
+                    logo_url: publicUrl,
+                    address: companyAddress
+                })
+                .eq('company_name', selectedCompany);
 
-            const { error: insertError } = await supabase
-                .from('company_logo')
-                .insert([{ url: publicUrl }]);
+            const { error: insertError } = updateError;
 
             if (insertError) {
                 throw insertError;
@@ -1684,15 +1712,14 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
                     const base64Data = e.target?.result as string;
                     
                     try {
-                        // Tabloyu güncelle (base64 data URL olarak)
-                        await supabase
-                            .from('company_logo')
-                            .delete()
-                            .neq('id', '00000000-0000-0000-0000-000000000000');
-
+                        // Tabloyu güncelle (base64 data URL olarak) - Sadece seçili şirketin logo_url'ini güncelle
                         const { error: insertError } = await supabase
                             .from('company_logo')
-                            .insert([{ url: base64Data }]);
+                            .update({ 
+                                logo_url: base64Data,
+                                address: companyAddress
+                            })
+                            .eq('company_name', selectedCompany);
 
                         if (insertError) {
                             throw insertError;
@@ -1731,11 +1758,11 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
                 .from('company-assets')
                 .remove(['company-logo.png', 'company-logo.jpg', 'company-logo.jpeg']);
 
-            // 2. Tablodan sil
+            // 2. Seçili şirketin logo_url'ini temizle
             await supabase
                 .from('company_logo')
-                .delete()
-                .neq('id', '00000000-0000-0000-0000-000000000000'); // Tüm kayıtları sil
+                .update({ logo_url: null })
+                .eq('company_name', selectedCompany);
 
             // 3. localStorage'dan sil
             localStorage.removeItem('proforma_logo');
@@ -1770,10 +1797,53 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
                 </div>
 
                 <div className="space-y-6">
+                    {/* Şirket Seçimi */}
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+                            Şirket Seçimi
+                        </label>
+                        <div className="flex space-x-4">
+                            <button
+                                onClick={() => handleCompanyChange('DASPI')}
+                                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                                    selectedCompany === 'DASPI'
+                                        ? 'bg-blue-600 text-white'
+                                        : 'bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500'
+                                }`}
+                            >
+                                DASPI
+                            </button>
+                            <button
+                                onClick={() => handleCompanyChange('OLIVOS')}
+                                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                                    selectedCompany === 'OLIVOS'
+                                        ? 'bg-blue-600 text-white'
+                                        : 'bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500'
+                                }`}
+                            >
+                                OLIVOS
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Şirket Adresi */}
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+                            Şirket Adresi
+                        </label>
+                        <textarea
+                            value={companyAddress}
+                            onChange={(e) => setCompanyAddress(e.target.value)}
+                            className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md"
+                            rows={3}
+                            placeholder="Şirket adres bilgilerini girin..."
+                        />
+                    </div>
+
                     {/* Logo Upload */}
                     <div>
                         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
-                            Şirket Logosu
+                            {selectedCompany} Logosu
                         </label>
                         
                         {/* Logo Preview */}

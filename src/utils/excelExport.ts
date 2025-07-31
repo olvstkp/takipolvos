@@ -8,10 +8,11 @@ export interface ExcelExportData {
     proformaGroups: ProformaGroup[];
     packingListCalculations: any[];
     currency: 'EUR' | 'USD';
+    selectedCompany?: string;
 }
 
 export const generateProformaExcel = async (data: ExcelExportData) => {
-    const { proformaData, selectedCustomer, products } = data;
+    const { proformaData, selectedCustomer, products, selectedCompany = 'DASPI' } = data;
     
     const workbook = new ExcelJS.Workbook();
     
@@ -65,7 +66,7 @@ export const generateProformaExcel = async (data: ExcelExportData) => {
 
 // INVOICE SHEET - Resimle birebir aynı
 const createInvoiceSheet = async (workbook: ExcelJS.Workbook, data: ExcelExportData, seriesColorMap: Map<string, string>) => {
-    const { proformaData, selectedCustomer, products, currency } = data;
+    const { proformaData, selectedCustomer, products, currency, selectedCompany = 'DASPI' } = data;
     const invoiceSheet = workbook.addWorksheet('INVOICE');
     
     // Sütun genişlikleri - resimle uyumlu (A-D ana tablo, E-F sağ taraf)
@@ -80,24 +81,23 @@ const createInvoiceSheet = async (workbook: ExcelJS.Workbook, data: ExcelExportD
 
     // Logo ekle A1 hücresine (Supabase'den çek)
     try {
-        // Supabase'den logo URL'sini çek
+        // Seçili şirketin logo ve adres bilgilerini çek
         const { supabase } = await import('../lib/supabase');
         const { data: logoData, error } = await supabase
             .from('company_logo')
-            .select('url')
-            .order('uploaded_at', { ascending: false })
-            .limit(1)
+            .select('logo_url, address, company_name')
+            .eq('company_name', selectedCompany)
             .single();
 
-        if (logoData && !error && logoData.url) {
+        if (logoData && !error && logoData.logo_url) {
             let logoBuffer: ArrayBuffer;
             let logoExtension: string = 'png';
             
             try {
-                if (logoData.url.startsWith('data:')) {
+                if (logoData.logo_url.startsWith('data:')) {
                     // Base64 data URL
                     console.log('Base64 logo bulundu, işleniyor...');
-                    const base64Data = logoData.url.split(',')[1];
+                    const base64Data = logoData.logo_url.split(',')[1];
                     const binaryString = atob(base64Data);
                     const bytes = new Uint8Array(binaryString.length);
                     for (let i = 0; i < binaryString.length; i++) {
@@ -106,15 +106,15 @@ const createInvoiceSheet = async (workbook: ExcelJS.Workbook, data: ExcelExportD
                     logoBuffer = bytes.buffer;
                     
                     // MIME type'tan extension belirle
-                    if (logoData.url.includes('image/jpeg') || logoData.url.includes('image/jpg')) {
+                    if (logoData.logo_url.includes('image/jpeg') || logoData.logo_url.includes('image/jpg')) {
                         logoExtension = 'jpeg';
-                    } else if (logoData.url.includes('image/png')) {
+                    } else if (logoData.logo_url.includes('image/png')) {
                         logoExtension = 'png';
                     }
                 } else {
                     // Normal URL (Storage'dan)
                     console.log('Storage URL\'si bulundu, fetch ediliyor...');
-                    const logoResponse = await fetch(logoData.url);
+                    const logoResponse = await fetch(logoData.logo_url);
                     if (!logoResponse.ok) {
                         throw new Error(`Logo fetch hatası: ${logoResponse.status}`);
                     }
@@ -123,8 +123,8 @@ const createInvoiceSheet = async (workbook: ExcelJS.Workbook, data: ExcelExportD
                     logoBuffer = await logoBlob.arrayBuffer();
                     
                     // URL'den extension belirle
-                    logoExtension = logoData.url.includes('.png') ? 'png' : 
-                                  logoData.url.includes('.jpg') || logoData.url.includes('.jpeg') ? 'jpeg' : 'png';
+                    logoExtension = logoData.logo_url.includes('.png') ? 'png' : 
+                                  logoData.logo_url.includes('.jpg') || logoData.logo_url.includes('.jpeg') ? 'jpeg' : 'png';
                 }
                 
                 // Excel'e resim ekle
@@ -156,36 +156,40 @@ const createInvoiceSheet = async (workbook: ExcelJS.Workbook, data: ExcelExportD
     }
 
     // Şirket adres bilgileri (Sol üst - Logo yoksa gösterilecek)
-    // Logo varsa bu bilgiler A4'ten başlayacak
+    // Logo varsa bu bilgiler A3'ten başlayacak
     let addressStartRow = 1;
+    let companyAddress = `DUATEPE MAH.YENİTABAKHANE CAD.OLİVOS APT NO:2
+TİRE / İZMİR
+TEL: 0266 3921356`; // Default DASPI adresi
+    
     try {
-        // Logo var mı kontrol et
+        // Seçili şirketin bilgilerini çek
         const { supabase } = await import('../lib/supabase');
-        const { data: logoCheck } = await supabase
+        const { data: companyData } = await supabase
             .from('company_logo')
-            .select('url')
-            .limit(1)
+            .select('logo_url, address')
+            .eq('company_name', selectedCompany)
             .single();
         
-        if (logoCheck?.url) {
+        if (companyData?.logo_url) {
             addressStartRow = 3; // Logo varsa adres A3'ten başlar (logo 2 satır)
         }
+        
+        if (companyData?.address) {
+            companyAddress = companyData.address;
+        }
     } catch (error) {
-        // Logo yoksa A1'den başlar
+        // Hata durumunda default değerleri kullan
+        console.error('Şirket bilgileri çekme hatası:', error);
     }
 
-    // Şirket adres bilgileri - Renk #808000 (koyu sarı-yeşil)
-    const addressCell1 = invoiceSheet.getCell(`A${addressStartRow}`);
-    addressCell1.value = 'DUATEPE MAH.YENİTABAKHANE CAD.OLİVOS APT NO:2';
-    addressCell1.font = { color: { argb: 'FF808000' }, size: 10 }; // #808000 renk
-    
-    const addressCell2 = invoiceSheet.getCell(`A${addressStartRow + 1}`);
-    addressCell2.value = 'TİRE / İZMİR';
-    addressCell2.font = { color: { argb: 'FF808000' }, size: 10 }; // #808000 renk
-    
-    const addressCell3 = invoiceSheet.getCell(`A${addressStartRow + 2}`);
-    addressCell3.value = 'TEL: 0266 3921356';
-    addressCell3.font = { color: { argb: 'FF808000' }, size: 10 }; // #808000 renk
+    // Şirket adres bilgilerini satırlara böl ve ekle
+    const addressLines = companyAddress.split('\n');
+    addressLines.forEach((line, index) => {
+        const addressCell = invoiceSheet.getCell(`A${addressStartRow + index}`);
+        addressCell.value = line.trim();
+        addressCell.font = { color: { argb: 'FF808000' }, size: 10 }; // #808000 renk
+    });
 
     // INVOICE başlığı (Sağ üst - resimde gösterildiği gibi)
     invoiceSheet.mergeCells('E1:F1');
