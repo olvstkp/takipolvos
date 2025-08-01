@@ -1,6 +1,11 @@
 import ExcelJS from 'exceljs';
 import { Proforma, ProformaItem, Customer, Product, ProformaGroup } from '../types/proforma';
 
+export interface ProductExportData {
+    products: any[];
+    currency: 'EUR' | 'USD';
+}
+
 export interface ExcelExportData {
     proformaData: Proforma;
     selectedCustomer: Customer;
@@ -60,6 +65,88 @@ export const generateProformaExcel = async (data: ExcelExportData) => {
     const link = document.createElement('a');
     link.href = url;
     link.download = `${proformaData.proformaNumber}-Invoice.xlsx`;
+    link.click();
+    window.URL.revokeObjectURL(url);
+};
+
+export const generateProductsExcel = async (data: ProductExportData) => {
+    const { products, currency } = data;
+    
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Ürünler');
+    
+    // Sütun başlıkları
+    sheet.columns = [
+        { key: 'A', width: 40, header: 'ÜRÜN ADI' },
+        { key: 'B', width: 25, header: 'SERİ' },
+        { key: 'C', width: 30, header: 'PROFORMA GRUBU' },
+        { key: 'D', width: 15, header: 'KOLİ FIYATI (€)' },
+        { key: 'E', width: 15, header: 'ADET FIYATI (€)' },
+        { key: 'F', width: 15, header: 'KOLİ FIYATI ($)' },
+        { key: 'G', width: 15, header: 'ADET FIYATI ($)' },
+        { key: 'H', width: 20, header: 'BARKOD' },
+        { key: 'I', width: 15, header: 'DURUM' },
+        { key: 'J', width: 20, header: 'OLUŞTURULMA TARİHİ' },
+        { key: 'K', width: 20, header: 'ÜRÜN TİPİ' },
+        { key: 'L', width: 15, header: 'BOYUT DEĞERİ' },
+        { key: 'M', width: 15, header: 'BOYUT BİRİMİ' }
+    ];
+    
+    // Başlık satırını formatla
+    const headerRow = sheet.getRow(1);
+    headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    headerRow.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF4F81BD' }
+    };
+    
+    // Veri satırlarını ekle
+    products.forEach((product: any, index) => {
+        const row = sheet.getRow(index + 2);
+        row.values = [
+            product.name,
+            product.series?.name || product.series || '',
+            product.proforma_group?.name || '',
+            product.price_per_case || product.pricePerCase || 0,
+            product.price_per_piece || product.pricePerPiece || 0,
+            product.price_per_case_usd || product.pricePerCaseUsd || 0,
+            product.price_per_piece_usd || product.pricePerPieceUsd || 0,
+            product.barcode || product.sku || '',
+            product.is_active ? 'Aktif' : 'Pasif',
+            new Date(product.created_at || Date.now()).toLocaleDateString('tr-TR'),
+            product.product_type?.name || '',
+            product.size_value || '',
+            product.size_unit || ''
+        ];
+        
+        // Durum sütununu renklendir
+        const statusCell = row.getCell(9);
+        if (product.is_active) {
+            statusCell.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: 'FF90EE90' } // Açık yeşil
+            };
+        } else {
+            statusCell.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: 'FFFFB6C1' } // Açık kırmızı
+            };
+        }
+    });
+    
+    // Excel dosyasını kaydet
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { 
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
+    });
+    
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `Ürünler_${new Date().toISOString().split('T')[0]}.xlsx`;
     link.click();
     window.URL.revokeObjectURL(url);
 };

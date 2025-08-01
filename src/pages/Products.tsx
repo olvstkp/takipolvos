@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Plus, Edit, Trash2, Save, X, Package, DollarSign, Tag, Box, Upload, Settings } from 'lucide-react';
+import { Search, Plus, Edit, Trash2, Save, X, Package, DollarSign, Tag, Box, Upload, Settings, Download } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useProductTypes, useProformaGroups } from '../hooks/useProforma';
 import toast from 'react-hot-toast';
 import ProductImport from '../components/ProductImport';
 import SeriesManagement from '../components/SeriesManagement';
 import ProformaGroupsManagement from '../components/ProformaGroupsManagement';
+import { generateProductsExcel } from '../utils/excelExport';
 
 interface Series {
   id: string;
@@ -427,6 +428,35 @@ const Products: React.FC = () => {
         setProformaGroups((prev: ProformaGroup[]) => [...prev, newGroup]);
     };
 
+    const handleExportProducts = async () => {
+        try {
+            // Proforma gruplarını ayrı olarak çek
+            const { data: proformaGroupsData, error: groupsError } = await supabase
+                .from('proforma_groups')
+                .select('*')
+                .order('name');
+
+            if (groupsError) {
+                console.error('Proforma groups error:', groupsError);
+            }
+
+            // Ürünleri proforma grupları ile birleştir
+            const productsWithGroups = products.map(product => ({
+                ...product,
+                proforma_group: proformaGroupsData?.find(group => group.id === product.proforma_group_id) || null
+            }));
+
+            await generateProductsExcel({
+                products: productsWithGroups,
+                currency: selectedCurrency
+            });
+            toast.success('Ürünler başarıyla dışa aktarıldı!');
+        } catch (error) {
+            toast.error('Dışa aktarma sırasında hata oluştu!');
+            console.error('Export error:', error);
+        }
+    };
+
     if (loading) {
     return (
             <div className="flex items-center justify-center min-h-[400px]">
@@ -485,6 +515,13 @@ const Products: React.FC = () => {
             >
               <Upload className="w-4 h-4 mr-2" />
               Excel İçeri Aktar
+            </button>
+            <button
+              onClick={handleExportProducts}
+              className="flex items-center px-4 py-2 bg-orange-600 text-white rounded-md hover:bg-orange-700"
+            >
+              <Download className="w-4 h-4 mr-2" />
+              Excel Dışa Aktar
             </button>
           <button
                     onClick={() => setShowAddModal(true)}
@@ -591,10 +628,10 @@ const Products: React.FC = () => {
       {/* Products Table */}
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full">
+          <table className="w-full min-w-[1200px]">
             <thead className="bg-gray-50 dark:bg-gray-700">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider w-12">
                   <input
                     type="checkbox"
                     checked={selectedProducts.length === filteredProducts.length && filteredProducts.length > 0}
@@ -602,23 +639,23 @@ const Products: React.FC = () => {
                     className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
                   />
                 </th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Ürün Adı</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Seri</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">PROFORMA GRUBU</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider w-80">Ürün Adı</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider w-40">Seri</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider w-48">PROFORMA GRUBU</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider w-32">
                                     Koli Fiyatı ({selectedCurrency === 'EUR' ? '€' : '$'})
                                 </th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider w-32">
                                     Adet Fiyatı ({selectedCurrency === 'EUR' ? '€' : '$'})
                                 </th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Durum</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">İşlemler</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider w-24">Durum</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider w-32">İşlemler</th>
               </tr>
             </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
               {filteredProducts.map((product) => (
                 <tr key={product.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
-                  <td className="px-6 py-4 whitespace-nowrap">
+                  <td className="px-6 py-4 whitespace-nowrap w-12">
                     <input
                       type="checkbox"
                       checked={selectedProducts.includes(product.id)}
@@ -626,17 +663,17 @@ const Products: React.FC = () => {
                       className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
                     />
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
+                  <td className="px-6 py-4 whitespace-nowrap w-80">
                                         <div className="text-sm font-medium text-gray-900 dark:text-white">
                                             {product.name}
                     </div>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
+                  <td className="px-6 py-4 whitespace-nowrap w-40">
                                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
                                             {product.series?.name || 'N/A'}
                                         </span>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
+                  <td className="px-6 py-4 whitespace-nowrap w-48">
                     <div className="text-sm text-gray-900 dark:text-white">
                       {(() => {
                         const proformaGroup = proformaGroups.find(pg => pg.id === product.proforma_group_id);
@@ -657,19 +694,19 @@ const Products: React.FC = () => {
                       })()}
                     </div>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white w-32">
                     {selectedCurrency === 'EUR' 
                       ? `€${product.price_per_case.toFixed(2)}`
                       : `$${(product.price_per_case_usd || product.price_per_case * 1.1).toFixed(2)}`
                     }
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white w-32">
                     {selectedCurrency === 'EUR' 
                       ? `€${product.price_per_piece.toFixed(2)}`
                       : `$${(product.price_per_piece_usd || product.price_per_piece * 1.1).toFixed(2)}`
                     }
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
+                  <td className="px-6 py-4 whitespace-nowrap w-24">
                     <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
                                             product.is_active 
                         ? 'bg-green-100 text-green-800' 
@@ -678,7 +715,7 @@ const Products: React.FC = () => {
                                             {product.is_active ? 'Aktif' : 'Pasif'}
                     </span>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium w-32">
                     <div className="flex space-x-2">
                       <button
                         onClick={() => {
@@ -686,12 +723,14 @@ const Products: React.FC = () => {
                           setShowAddModal(true);
                         }}
                         className="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300"
+                        title="Düzenle"
                       >
                         <Edit className="w-4 h-4" />
                       </button>
                       <button
                         onClick={() => handleDeleteClick(product)}
                         className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300"
+                        title="Sil"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
