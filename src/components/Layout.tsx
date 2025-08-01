@@ -80,7 +80,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         lg:translate-x-0 lg:static lg:inset-0
       `}>
         <div className="flex items-center justify-between h-16 px-4 border-b border-gray-200 dark:border-gray-700">
-          <h1 className="text-xl font-bold text-gray-800 dark:text-white">Sabun Üretim</h1>
+          <h1 className="text-xl font-bold text-gray-800 dark:text-white">Olivos Takip</h1>
           <button
             onClick={() => setSidebarOpen(false)}
             className="lg:hidden p-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-700"

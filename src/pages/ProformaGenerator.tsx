@@ -320,6 +320,17 @@ const ProformaGenerator: React.FC<ProformaGeneratorProps> = ({ onSuccess }) => {
     }, [proformaData.items, proformaData.shipment, products]);
 
     const handleSaveProforma = async () => {
+        // Ürün kontrolü
+        const validItems = proformaData.items.filter(item => item.productId && item.productId.trim() !== '');
+        
+        if (validItems.length === 0) {
+            toast.error('Lütfen en az bir ürün seçiniz!', {
+                icon: '⚠️',
+                duration: 4000
+            });
+            return;
+        }
+
         const toastId = toast.loading('Proforma kaydediliyor...', {
             icon: '⏳'
         });
