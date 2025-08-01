@@ -77,7 +77,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       {/* Sidebar */}
       <div 
         className={`
-          fixed inset-y-0 left-0 z-50 bg-white dark:bg-gray-800 shadow-lg transform transition-all duration-300 ease-in-out
+          fixed inset-y-0 left-0 z-50 bg-white dark:bg-gray-800 shadow-lg transform transition-all duration-300 ease-out
           ${sidebarOpen ? 'translate-x-0 w-64' : '-translate-x-full w-16'}
           lg:translate-x-0 lg:static lg:inset-0 lg:w-16 lg:hover:w-64
         `}
@@ -85,8 +85,8 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         onMouseLeave={() => setSidebarHovered(false)}
       >
         <div className="flex items-center justify-between h-16 px-4 border-b border-gray-200 dark:border-gray-700">
-          <h1 className={`text-xl font-bold text-gray-800 dark:text-white transition-opacity duration-300 ${
-            sidebarHovered || sidebarOpen ? 'opacity-100' : 'opacity-0 lg:hidden'
+          <h1 className={`text-xl font-bold text-gray-800 dark:text-white transition-all duration-500 ease-out whitespace-nowrap overflow-hidden ${
+            sidebarHovered || sidebarOpen ? 'opacity-100 translate-x-0 delay-300 w-auto' : 'opacity-0 -translate-x-4 lg:hidden w-0'
           }`}>
             Olivos Takip
           </h1>
@@ -113,8 +113,8 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
               title={!sidebarHovered && !sidebarOpen ? item.label : ''}
             >
               <item.icon className="w-5 h-5 mr-3 flex-shrink-0" />
-              <span className={`transition-opacity duration-300 ${
-                sidebarHovered || sidebarOpen ? 'opacity-100' : 'opacity-0 lg:hidden'
+              <span className={`transition-all duration-500 ease-out whitespace-nowrap overflow-hidden ${
+                sidebarHovered || sidebarOpen ? 'opacity-100 translate-x-0 delay-400 w-auto' : 'opacity-0 -translate-x-4 lg:hidden w-0'
               }`}>
                 {item.label}
               </span>
