@@ -333,15 +333,19 @@ const Proforma: React.FC = () => {
     };
 
     const handleDownload = async (proformaId: string) => {
+        const toastId = toast.loading('Excel dosyası hazırlanıyor...', {
+            icon: '📊'
+        });
+
         try {
             const detail = await fetchProformaDetail(proformaId);
             if (!detail) {
-                toast.error('Proforma detayları yüklenemedi');
+                toast.error('Proforma bilgileri yüklenemedi!', { id: toastId });
                 return;
             }
 
             // Ürünleri çek
-            const { data: products, error: productsError } = await supabase
+            const { data: productsData, error: productsError } = await supabase
                 .from('products')
                 .select(`
                     *,
@@ -352,40 +356,48 @@ const Proforma: React.FC = () => {
                         net_weight_kg_per_piece,
                         packaging_weight_kg_per_case
                     )
-                `);
+                `)
+                .eq('is_active', true);
 
             if (productsError) {
-                console.error('Ürünler yüklenirken hata:', productsError);
-                toast.error('Ürün bilgileri yüklenemedi');
+                console.error('Ürünler çekilemedi:', productsError);
+                toast.error('Ürün bilgileri yüklenemedi!', { id: toastId });
                 return;
             }
 
             // Proforma gruplarını çek
-            const { data: proformaGroups, error: groupsError } = await supabase
+            const { data: proformaGroupsData, error: groupsError } = await supabase
                 .from('proforma_groups')
-                .select('*');
+                .select('*')
+                .order('name');
 
             if (groupsError) {
-                console.error('Proforma grupları yüklenirken hata:', groupsError);
+                console.error('Proforma grupları çekilemedi:', groupsError);
             }
 
-            // Proforma verilerini ExcelExportData formatına dönüştür
+            // Ürünleri map'e dönüştür kolay erişim için
+            const productsMap = new Map(productsData?.map(p => [p.id, p]) || []);
+
+            // Proforma verilerini dönüştür
             const proformaData = {
                 id: detail.id,
                 proformaNumber: detail.proforma_number,
-                customerId: detail.customer_id,
                 issueDate: detail.issue_date,
                 validityDate: detail.validity_date,
-                items: detail.proforma_items.map(item => ({
-                    productId: item.product_id,
-                    description: item.description || item.product?.name || '',
-                    quantity: item.quantity,
-                    unitPrice: item.unit_price,
-                    total: item.total,
-                    unit: item.unit
-                })),
-                totalAmount: detail.total_amount,
-                paymentMethod: detail.payment_method,
+                customerId: detail.customer_id,
+                items: detail.proforma_items.map(item => {
+                    const product = productsMap.get(item.product_id);
+                    return {
+                        productId: item.product_id,
+                        description: item.description || product?.name || 'Ürün Bulunamadı',
+                        quantity: Number(item.quantity) || 0,
+                        unitPrice: Number(item.unit_price) || 0,
+                        total: Number(item.total) || 0,
+                        unit: item.unit || 'case'
+                    };
+                }),
+                totalAmount: Number(detail.total_amount) || 0,
+                paymentMethod: detail.payment_method || 'CASH IN ADVANCE',
                 bankInfo: {
                     bankName: 'İŞ BANKASI',
                     branch: 'EDREMİT / BALIKESİR ŞUBE',
@@ -394,34 +406,118 @@ const Proforma: React.FC = () => {
                 },
                 notes: detail.notes || 'Plus/Minus 10 percent in quantity and amount will be allowed',
                 departure: 'İzmir-FOB',
-                delivery: detail.delivery,
+                delivery: detail.customer.delivery || 'CZECHIA',
                 brand: 'DASPI',
                 shipment: {
-                    weight_per_pallet_kg: detail.weight_per_pallet_kg,
-                    pallets: detail.pallets.map(pallet => ({
-                        pallet_number: pallet.pallet_number,
-                        width_cm: pallet.width_cm,
-                        length_cm: pallet.length_cm,
-                        height_cm: pallet.height_cm
-                    }))
+                    weight_per_pallet_kg: Number(detail.weight_per_pallet_kg) || 20,
+                    pallets: (detail.pallets || []).length > 0 ? detail.pallets.map(pallet => ({
+                        pallet_number: Number(pallet.pallet_number) || 1,
+                        width_cm: Number(pallet.width_cm) || 80,
+                        length_cm: Number(pallet.length_cm) || 120,
+                        height_cm: Number(pallet.height_cm) || 124
+                    })) : [
+                        { pallet_number: 1, width_cm: 80, length_cm: 120, height_cm: 124 },
+                        { pallet_number: 2, width_cm: 80, length_cm: 120, height_cm: 126 }
+                    ]
                 }
             };
+
+            const selectedCustomer = {
+                id: detail.customer.id,
+                name: detail.customer.name,
+                address: detail.customer.address,
+                taxId: detail.customer.tax_id,
+                contactPerson: detail.customer.contact_person,
+                phone: detail.customer.phone,
+                phone2: detail.customer.phone2,
+                email: detail.customer.email,
+                delivery: detail.customer.delivery
+            };
+
+            // Ürünleri dönüştür - eksik alanları tamamla
+            const transformedProducts = (productsData || []).map(product => ({
+                id: product.id,
+                name: product.name,
+                sku: product.id, // fallback
+                series: product.series?.name || product.series_id || '',
+                pricePerCase: Number(product.price_per_case) || 0,
+                pricePerPiece: Number(product.price_per_piece) || 0,
+                pricePerCaseUsd: Number(product.price_per_case_usd) || 0,
+                pricePerPieceUsd: Number(product.price_per_piece_usd) || 0,
+                net_weight_kg_per_piece: Number(product.series?.net_weight_kg_per_piece) || 0.1,
+                piecesPerCase: Number(product.series?.pieces_per_case) || 12,
+                packaging_weight_kg_per_case: Number(product.series?.packaging_weight_kg_per_case) || 0.5,
+                width_cm: 10,
+                height_cm: 15,
+                depth_cm: 8,
+                proforma_group_id: product.proforma_group_id,
+                product_type_id: product.product_type_id,
+                size_value: product.size_value,
+                size_unit: product.size_unit,
+                product_type: product.product_type,
+                proforma_group: product.proforma_group
+            }));
+
+            // Şirket bilgilerini DB'den çek
+            const savedCompany = localStorage.getItem('selected_company') || 'DASPI';
+            let companyData = { name: savedCompany, address: '', logo_url: null };
+            
+            try {
+                const { data: companyResult, error: companyError } = await supabase
+                    .from('company_logo')
+                    .select('company_name, address, logo_url')
+                    .eq('company_name', savedCompany)
+                    .single();
+
+                if (companyResult && !companyError) {
+                    companyData = {
+                        name: companyResult.company_name,
+                        address: companyResult.address || '',
+                        logo_url: companyResult.logo_url
+                    };
+                }
+            } catch (error) {
+                console.error('Şirket bilgileri çekilemedi:', error);
+                // Fallback olarak localStorage kullan
+            }
+
+            // Packing list hesaplamaları oluştur
+            const packingListCalculations = proformaData.items.map((item, index) => {
+                const product = productsMap.get(item.productId);
+                return {
+                    no: index + 1,
+                    description: item.description,
+                    quantity: item.quantity,
+                    unit: item.unit,
+                    product: product,
+                    weight: product ? product.series?.net_weight_kg_per_piece * item.quantity : 0
+                };
+            });
 
             // Excel export fonksiyonunu çağır
             await generateProformaExcel({
                 proformaData,
-                selectedCustomer: detail.customer,
-                products: products || [],
-                proformaGroups: proformaGroups || [],
-                packingListCalculations: [], // Boş bırakılabilir
+                selectedCustomer,
+                products: transformedProducts,
+                proformaGroups: proformaGroupsData || [],
+                packingListCalculations,
                 currency: 'EUR',
-                selectedCompany: 'DASPI'
+                selectedCompany: companyData
             });
 
-            toast.success('Proforma başarıyla indirildi!');
+            toast.success('Excel dosyası başarıyla indirildi!', {
+                id: toastId,
+                icon: '✅',
+                duration: 3000
+            });
+
         } catch (error) {
-            console.error('Proforma indirme hatası:', error);
-            toast.error('Proforma indirilirken hata oluştu');
+            console.error('Download hatası:', error);
+            toast.error('Excel dosyası oluşturulurken hata oluştu!', {
+                id: toastId,
+                icon: '❌',
+                duration: 5000
+            });
         }
     };
 

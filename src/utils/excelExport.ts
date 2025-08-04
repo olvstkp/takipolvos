@@ -573,113 +573,522 @@ TEL: 0266 3921356`; // Default DASPI adresi
     thankYouCell.alignment = { horizontal: 'center', vertical: 'middle' };
 };
 
-// ÇALIŞMA Sheet'i
+// ÇALIŞMA Sheet'i - Detaylı Packing List formatı
 const createCalismaSheet = async (workbook: ExcelJS.Workbook, data: ExcelExportData) => {
-    const { proformaData, products, proformaGroups } = data;
-    
+    const { proformaData, selectedCustomer, products, currency, selectedCompany = 'DASPI' } = data;
     const calismaSheet = workbook.addWorksheet('ÇALIŞMA');
     
+    // Sütun genişlikleri
     calismaSheet.columns = [
-        { key: 'A', width: 40 },
-        { key: 'B', width: 15 }
+        { key: 'A', width: 5 },   // NO
+        { key: 'B', width: 35 },  // DESCRIPTION OF GOODS
+        { key: 'C', width: 8 },   // width/cm
+        { key: 'D', width: 8 },   // height/cm
+        { key: 'E', width: 8 },   // high/cm
+        { key: 'F', width: 8 },   // M3
+        { key: 'G', width: 8 },   // TARE KG
+        { key: 'H', width: 12 },  // WEIGHT Kg/box
+        { key: 'I', width: 12 },  // BRÜT WEIGHT Kg/box
+        { key: 'J', width: 8 },   // cup/CASES
+        { key: 'K', width: 10 },  // TOTAL KG
+        { key: 'L', width: 10 },  // TOTAL TARE
+        { key: 'M', width: 10 },  // BRÜT KG
+        { key: 'N', width: 10 }   // ADET/PCS
     ];
 
-    // Grup hesaplamaları
-    const groupedData = calculateGroupedData(proformaData, products, proformaGroups);
-    const totals = calculateTotals(groupedData);
-    
-    let calismaRow = 1;
-    Object.entries(groupedData).forEach(([, group]: [string, any]) => {
-        const groupName = group.groupName;
+    // Logo ve şirket bilgileri (INVOICE'takı gibi)
+    try {
+        const { supabase } = await import('../lib/supabase');
+        const { data: logoData, error } = await supabase
+            .from('company_logo')
+            .select('logo_url, address, company_name')
+            .eq('company_name', selectedCompany)
+            .single();
+
+        if (logoData && !error && logoData.logo_url) {
+            try {
+                let logoBuffer: ArrayBuffer | undefined;
+                let logoExtension: string = 'png';
+                
+                if (logoData.logo_url.startsWith('data:')) {
+                    const base64Data = logoData.logo_url.split(',')[1];
+                    const binaryString = atob(base64Data);
+                    const bytes = new Uint8Array(binaryString.length);
+                    for (let i = 0; i < binaryString.length; i++) {
+                        bytes[i] = binaryString.charCodeAt(i);
+                    }
+                    logoBuffer = bytes.buffer;
+                    
+                    if (logoData.logo_url.includes('image/jpeg') || logoData.logo_url.includes('image/jpg')) {
+                        logoExtension = 'jpeg';
+                    } else if (logoData.logo_url.includes('image/png')) {
+                        logoExtension = 'png';
+                    }
+                } else {
+                    const logoResponse = await fetch(logoData.logo_url);
+                    if (logoResponse.ok) {
+                        const logoBlob = await logoResponse.blob();
+                        logoBuffer = await logoBlob.arrayBuffer();
+                        logoExtension = logoData.logo_url.includes('.png') ? 'png' : 
+                                      logoData.logo_url.includes('.jpg') || logoData.logo_url.includes('.jpeg') ? 'jpeg' : 'png';
+                    }
+                }
+                
+                // Logo'yu ekle
+                if (logoBuffer) {
+                    const imageId = workbook.addImage({
+                        buffer: logoBuffer,
+                        extension: logoExtension as 'png' | 'jpeg' | 'gif',
+                    });
+                
+                    calismaSheet.addImage(imageId, {
+                        tl: { col: 0, row: 0 },
+                        ext: { width: 120, height: 60 },
+                        editAs: 'absolute'
+                    });
+                    
+                    calismaSheet.getRow(1).height = 30;
+                    calismaSheet.getRow(2).height = 30;
+                }
+                
+            } catch (logoError) {
+                console.error('Logo işleme hatası:', logoError);
+            }
+        }
+
+        // Şirket adres bilgileri
+        let addressStartRow = 1;
+        let companyAddress = `DUATEPE MAH.YENİTABAKHANE CAD.OLİVOS APT NO:2
+TİRE / İZMİR
+TEL: 0266 3921356`;
         
-        // Grup başlığı
-        calismaSheet.getCell(calismaRow, 1).value = groupName;
-        calismaSheet.getCell(calismaRow, 1).font = { bold: true, size: 12 };
-        calismaSheet.getCell(calismaRow, 1).fill = { 
-            type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFCCCCCC' } 
+        if (logoData?.logo_url) {
+            addressStartRow = 3;
+        }
+        
+        if (logoData?.address) {
+            companyAddress = logoData.address;
+        }
+
+        const addressLines = companyAddress.split('\n');
+        addressLines.forEach((line, index) => {
+            const addressCell = calismaSheet.getCell(`A${addressStartRow + index}`);
+            addressCell.value = line.trim();
+            addressCell.font = { color: { argb: 'FF808000' }, size: 10 };
+        });
+
+    } catch (error) {
+        console.error('Logo ekleme hatası:', error);
+    }
+
+    // ÇALIŞMA başlığı
+    calismaSheet.mergeCells('F10:I10');
+    const calismaHeader = calismaSheet.getCell('F10');
+    calismaHeader.value = 'ÇALIŞMA';
+    calismaHeader.font = { name: 'Arial', size: 16, bold: true };
+    calismaHeader.alignment = { horizontal: 'center', vertical: 'middle' };
+
+    // Tablo başlıkları
+    const headerRow = 12;
+    const headers = [
+        'NO', 'DESCRIPTION OF GOODS', 'width/cm', 'height/cm', 'high/cm', 'M3', 
+        'TARE KG', 'WEIGHT Kg/box', 'BRÜT WEIGHT Kg/box', 'cup/CASES', 
+        'TOTAL KG', 'TOTAL TARE', 'BRÜT KG', 'ADET/PCS'
+    ];
+
+    // İkinci satır başlıkları
+    const subHeaders = [
+        '', '', '', '', '', '', '', '', '', 
+        '', '', '', '', ''
+    ];
+
+    // Ana başlık satırı
+    headers.forEach((header, index) => {
+        const cell = calismaSheet.getCell(headerRow, index + 1);
+        cell.value = header;
+        cell.font = { bold: true, size: 9 };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } };
+        cell.border = {
+            top: { style: 'thin' }, left: { style: 'thin' },
+            bottom: { style: 'thin' }, right: { style: 'thin' }
         };
-        calismaRow += 2;
-
-        // Grup detayları
-        calismaSheet.getCell(calismaRow, 1).value = 'Total Number of Cases';
-        calismaSheet.getCell(calismaRow, 2).value = group.totalCases;
-        calismaRow++;
-
-        calismaSheet.getCell(calismaRow, 1).value = `Total number of ${groupName.toLowerCase()}`;
-        calismaSheet.getCell(calismaRow, 2).value = group.totalPieces;
-        calismaRow++;
-
-        calismaSheet.getCell(calismaRow, 1).value = 'Net Weight';
-        calismaSheet.getCell(calismaRow, 2).value = group.totalNetWeight.toFixed(2);
-        calismaRow++;
-
-        calismaSheet.getCell(calismaRow, 1).value = 'Gross Weight';
-        calismaSheet.getCell(calismaRow, 2).value = group.totalGrossWeight.toFixed(2);
-        calismaRow += 3;
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
     });
 
-    // Genel toplamlar
-    calismaSheet.getCell(calismaRow, 1).value = 'TOTAL NUMBER OF CASES';
-    calismaSheet.getCell(calismaRow, 2).value = totals.totalCases;
-    calismaSheet.getCell(calismaRow, 1).font = { bold: true };
-    calismaRow++;
+    // Özel başlık formatlaması (out pack sizes box)
+    calismaSheet.mergeCells('C11:E11');
+    const outPackHeader = calismaSheet.getCell('C11');
+    outPackHeader.value = 'out pack sizes ( box)';
+    outPackHeader.font = { bold: true, size: 9 };
+    outPackHeader.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } };
+    outPackHeader.border = {
+        top: { style: 'thin' }, left: { style: 'thin' },
+        bottom: { style: 'thin' }, right: { style: 'thin' }
+    };
+    outPackHeader.alignment = { horizontal: 'center', vertical: 'middle' };
 
-    calismaSheet.getCell(calismaRow, 1).value = 'TOTAL NUMBER OF SOAPS AND PRODUCTS';
-    calismaSheet.getCell(calismaRow, 2).value = totals.totalPieces;
-    calismaSheet.getCell(calismaRow, 1).font = { bold: true };
-    calismaRow++;
+    // Sitedeki PACKING LIST tablosunun aynı hesaplamalarını kullan
+    const groupedBySeries = proformaData.items.reduce((acc: Record<string, any>, item) => {
+        const product = products.find(p => p.id === item.productId);
+        if (!product) return acc;
 
-    calismaSheet.getCell(calismaRow, 1).value = 'NET KG';
-    calismaSheet.getCell(calismaRow, 2).value = totals.totalNetKg.toFixed(2);
-    calismaSheet.getCell(calismaRow, 1).font = { bold: true };
-    calismaRow++;
+        const isPromo = product.series === 'PROMO';
+        const groupKey = isPromo ? product.id : product.series || 'unknown'; // Use product ID to keep promo items separate
+        const description = isPromo ? `${product.name} - FREE` : product.series || 'Unknown Series';
 
-    calismaSheet.getCell(calismaRow, 1).value = 'GROSS KG';
-    calismaSheet.getCell(calismaRow, 2).value = totals.totalGrossKg.toFixed(2);
-    calismaSheet.getCell(calismaRow, 1).font = { bold: true };
+        if (!acc[groupKey]) {
+            acc[groupKey] = { 
+                products: [], 
+                totalQuantity: 0, 
+                net_weight_kg_per_unit: 0, 
+                packaging_weight_kg_per_case: 0, 
+                description: description 
+            };
+        }
+
+        acc[groupKey].products.push(product);
+        acc[groupKey].totalQuantity += item.quantity;
+        acc[groupKey].net_weight_kg_per_unit = product.net_weight_kg_per_piece * (item.unit === 'case' ? product.piecesPerCase : 1);
+        acc[groupKey].packaging_weight_kg_per_case = product.packaging_weight_kg_per_case;
+        return acc;
+    }, {});
+
+    const totalUnits = Object.values(groupedBySeries).reduce((sum: number, group: any) => sum + group.totalQuantity, 0);
+    const totalPalletWeight = (proformaData.shipment?.pallets?.length || 1) * (proformaData.shipment?.weight_per_pallet_kg || 20);
+    const palletWeightPerUnit = totalUnits > 0 ? totalPalletWeight / totalUnits : 0;
+
+    const packingListData = Object.keys(groupedBySeries).map((seriesKey, index) => {
+        const group = groupedBySeries[seriesKey];
+        const { totalQuantity, net_weight_kg_per_unit, packaging_weight_kg_per_case } = group;
+        const tarePerUnit = packaging_weight_kg_per_case + palletWeightPerUnit;
+        const brutWeightPerUnit = net_weight_kg_per_unit + tarePerUnit;
+        const totalNetWeight = totalQuantity * net_weight_kg_per_unit;
+        const totalTare = totalQuantity * tarePerUnit;
+        const totalBrutWeight = totalQuantity * brutWeightPerUnit;
+        const totalPieces = totalQuantity * (group.products[0]?.piecesPerCase ?? 1);
+        
+        return { 
+            no: index + 1, 
+            description: group.description, 
+            tare_kg_per_unit: tarePerUnit, 
+            net_weight_kg_per_unit, 
+            brut_weight_kg_per_unit: brutWeightPerUnit, 
+            cup_units: totalQuantity, 
+            total_kg: totalNetWeight, 
+            total_tare: totalTare, 
+            brut_kg: totalBrutWeight, 
+            adet_pcs: totalPieces 
+        };
+    });
+
+    // ÇALIŞMA sayfası satırları - sitedeki tablonun aynı verisi
+    let currentRow = headerRow + 1;
+    let totalWeight = 0;
+    let totalTare = 0;
+    let totalBrut = 0;
+    let totalCases = 0;
+    let totalPieces = 0;
+
+    packingListData.forEach((row) => {
+        // Seri bazlı renk belirleme
+        let cellColor = 'FFFFFF00'; // Sarı renk (seri ürünleri için)
+
+        const rowData = [
+            row.no, // NO
+            row.description, // DESCRIPTION - sitedeki ile aynı
+            '', // width - boş
+            '', // height - boş
+            '', // high - boş
+            '', // M3 - boş
+            row.tare_kg_per_unit.toFixed(3), // TARE KG/UNIT
+            row.net_weight_kg_per_unit.toFixed(3), // WEIGHT KG/UNIT
+            row.brut_weight_kg_per_unit.toFixed(3), // BRÜT WEIGHT KG/UNIT
+            row.cup_units, // CUP/UNITS - sitedeki ile aynı
+            row.total_kg.toFixed(2), // TOTAL KG
+            row.total_tare.toFixed(2), // TOTAL TARE
+            row.brut_kg.toFixed(2), // BRÜT KG
+            row.adet_pcs // ADET/PCS
+        ];
+
+        rowData.forEach((value, colIndex) => {
+            const cell = calismaSheet.getCell(currentRow, colIndex + 1);
+            cell.value = value;
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: cellColor } };
+            cell.border = {
+                top: { style: 'thin' }, left: { style: 'thin' },
+                bottom: { style: 'thin' }, right: { style: 'thin' }
+            };
+            cell.alignment = { horizontal: 'center', vertical: 'middle' };
+            cell.font = { name: 'Arial', size: 9 };
+        });
+
+        // Genel toplamları güncelle
+        totalWeight += row.total_kg;
+        totalTare += row.total_tare;
+        totalBrut += row.brut_kg;
+        totalCases += row.cup_units;
+        totalPieces += row.adet_pcs;
+
+        currentRow++;
+    });
+
+    // Toplam satırı
+    const totalRowData = [
+        '', '', '', '', '', '', '', '', '', 
+        totalCases, 
+        totalWeight.toFixed(2), 
+        totalTare.toFixed(2), 
+        totalBrut.toFixed(2), 
+        totalPieces
+    ];
+
+    totalRowData.forEach((value, colIndex) => {
+        const cell = calismaSheet.getCell(currentRow, colIndex + 1);
+        cell.value = value;
+        cell.font = { name: 'Arial', size: 10, bold: true };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFCCCCCC' } };
+        cell.border = {
+            top: { style: 'thick' }, left: { style: 'thin' },
+            bottom: { style: 'thick' }, right: { style: 'thin' }
+        };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    });
 };
 
-// PACKING LIST Sheet'i
+// PACKING LIST Sheet'i - Sitedeki "Packing List (Özet)" formatında
 const createPackingListSheet = async (workbook: ExcelJS.Workbook, data: ExcelExportData) => {
-    const { packingListCalculations: calculations } = data;
+    const { proformaData, products, proformaGroups, selectedCompany } = data;
     
     const packingSheet = workbook.addWorksheet('PACKING LIST');
 
     // Sütun genişlikleri
-    packingSheet.columns = [
-        { key: 'A', width: 5 },   // NO
-        { key: 'B', width: 25 },  // DESCRIPTION
-        { key: 'C', width: 12 },  // out pack
-        { key: 'D', width: 8 },   // width
-        { key: 'E', width: 8 },   // height
-        { key: 'F', width: 8 },   // high
-        { key: 'G', width: 8 },   // M3
-        { key: 'H', width: 8 },   // TARE
-        { key: 'I', width: 10 },  // WEIGHT
-        { key: 'J', width: 10 },  // BRUT WEIGHT
-        { key: 'K', width: 8 },   // cup
-        { key: 'L', width: 10 },  // TOTAL KG
-        { key: 'M', width: 10 },  // TOTAL TARE
-        { key: 'N', width: 10 },  // BRÜT KG
-        { key: 'O', width: 10 }   // ADET/PCS
+    packingSheet.getColumn(1).width = 30; // Ürün adları için
+    packingSheet.getColumn(2).width = 20;
+    packingSheet.getColumn(3).width = 15;
+    packingSheet.getColumn(4).width = 15;
+    packingSheet.getColumn(5).width = 30; // Özet başlıkları için
+    packingSheet.getColumn(6).width = 20;
+    packingSheet.getColumn(7).width = 15;
+
+    let currentRow = 1;
+
+    // Logo ve şirket bilgileri (INVOICE ve ÇALIŞMA sayfalarındaki gibi)
+    try {
+        const { supabase } = await import('../lib/supabase');
+        let companyName = 'DASPI';
+        
+        if (typeof selectedCompany === 'string') {
+            companyName = selectedCompany;
+        } else if (selectedCompany && typeof selectedCompany === 'object' && 'name' in selectedCompany) {
+            companyName = (selectedCompany as any).name;
+        }
+        
+        const { data: logoData, error } = await supabase
+            .from('company_logo')
+            .select('logo_url, address, company_name')
+            .eq('company_name', companyName)
+            .single();
+
+        if (logoData && !error && logoData.logo_url) {
+            try {
+                let logoBuffer: ArrayBuffer | undefined;
+                let logoExtension: string = 'png';
+                
+                if (logoData.logo_url.startsWith('data:')) {
+                    // Base64 data URL
+                    const base64Data = logoData.logo_url.split(',')[1];
+                    const binaryString = atob(base64Data);
+                    const bytes = new Uint8Array(binaryString.length);
+                    for (let i = 0; i < binaryString.length; i++) {
+                        bytes[i] = binaryString.charCodeAt(i);
+                    }
+                    logoBuffer = bytes.buffer;
+                    
+                    if (logoData.logo_url.includes('image/jpeg') || logoData.logo_url.includes('image/jpg')) {
+                        logoExtension = 'jpeg';
+                    } else if (logoData.logo_url.includes('image/png')) {
+                        logoExtension = 'png';
+                    }
+                } else {
+                    // Normal URL (Storage'dan)
+                    const logoResponse = await fetch(logoData.logo_url);
+                    if (logoResponse.ok) {
+                        const logoBlob = await logoResponse.blob();
+                        logoBuffer = await logoBlob.arrayBuffer();
+                        logoExtension = logoData.logo_url.includes('.png') ? 'png' : 
+                                      logoData.logo_url.includes('.jpg') || logoData.logo_url.includes('.jpeg') ? 'jpeg' : 'png';
+                    }
+                }
+                
+                // Logo'yu ekle
+                if (logoBuffer) {
+                    const imageId = workbook.addImage({
+                        buffer: logoBuffer,
+                        extension: logoExtension as 'png' | 'jpeg' | 'gif',
+                    });
+                
+                    packingSheet.addImage(imageId, {
+                        tl: { col: 0, row: 0 },
+                        ext: { width: 120, height: 60 },
+                        editAs: 'absolute'
+                    });
+                    
+                    packingSheet.getRow(1).height = 30;
+                    packingSheet.getRow(2).height = 30;
+                    currentRow = 3; // Logo varsa satır numarasını ayarla
+                }
+                
+            } catch (logoError) {
+                console.error('Logo işleme hatası:', logoError);
+            }
+        }
+
+        // Şirket adres bilgileri
+        let companyAddress = `DUATEPE MAH.YENİTABAKHANE CAD.OLİVOS APT NO:2
+TİRE / İZMİR
+TEL: 0266 3921356`;
+        
+        if (logoData?.address) {
+            companyAddress = logoData.address;
+        }
+
+        // Şirket adres bilgilerini satırlara böl ve ekle
+        const addressLines = companyAddress.split('\n');
+        addressLines.forEach((line, index) => {
+            const addressCell = packingSheet.getCell(`A${currentRow + index}`);
+            addressCell.value = line.trim();
+            addressCell.font = { color: { argb: 'FF000000' }, size: 10 };
+        });
+        
+        currentRow += addressLines.length + 1;
+
+    } catch (error) {
+        console.error('Logo ekleme hatası:', error);
+        // Fallback: Sadece şirket adı
+        const companyCell = packingSheet.getCell(`A${currentRow}`);
+        if (typeof selectedCompany === 'string') {
+            companyCell.value = selectedCompany;
+        } else if (selectedCompany && typeof selectedCompany === 'object' && 'name' in selectedCompany) {
+            companyCell.value = (selectedCompany as any).name;
+        } else {
+            companyCell.value = 'DASPI';
+        }
+        companyCell.font = { bold: true, size: 12, color: { argb: 'FF000000' } };
+        currentRow += 2;
+    }
+
+    // "PACKING LIST" başlığı
+    const headerCell = packingSheet.getCell(`A${currentRow}`);
+    headerCell.value = 'PACKING LIST';
+    headerCell.font = { bold: true, size: 14, color: { argb: 'FF000000' } };
+    currentRow += 2;
+
+    // Sitedeki mantığı kullanarak grupla
+    const groupedData = calculateGroupedData(proformaData, products, proformaGroups);
+    const groups = Object.values(groupedData);
+
+    // Ürün özetleri (alt alta düzenli format)
+    groups.forEach((group) => {
+        // Ürün adı (siyah ve kalın)
+        const productNameCell = packingSheet.getCell(`A${currentRow}`);
+        productNameCell.value = group.groupName;
+        productNameCell.font = { bold: true, color: { argb: 'FF000000' }, size: 12 };
+        currentRow++;
+
+        // Detaylar tablo formatında
+        const details = [
+            ['Total Number of Cases', group.totalCases],
+            [`Total number of ${group.groupName.toLowerCase()}`, group.totalPieces],
+            ['Net Weight', `${group.totalNetWeight.toFixed(2)} kg`],
+            ['Gross Weight', `${group.totalGrossWeight.toFixed(2)} kg`]
+        ];
+
+        details.forEach(([label, value]) => {
+            // Label
+            const labelCell = packingSheet.getCell(`A${currentRow}`);
+            labelCell.value = label;
+            labelCell.font = { size: 10, color: { argb: 'FF000000' } };
+            
+            // Value
+            const valueCell = packingSheet.getCell(`C${currentRow}`);
+            valueCell.value = value;
+            valueCell.font = { size: 10, color: { argb: 'FF000000' } };
+            
+            currentRow++;
+        });
+        
+        currentRow++; // Gruplar arası boşluk
+    });
+
+    // Alt kısımda: Genel Sevkiyat Özeti (kalın çerçeve ile)
+    currentRow += 2;
+    
+    const summaryStartRow = currentRow;
+    
+    // Toplam başlıkları
+    const totals = calculateTotals(groupedData);
+    
+    const summaryData = [
+        ['TOTAL NUMBER OF CASES', totals.totalCases],
+        ['TOTAL NUMBER OF SOAPS AND PRODUCTS', totals.totalPieces],
+        ['NET KG', totals.totalNetKg.toFixed(2)],
+        ['GROSS KG', totals.totalGrossKg.toFixed(2)],
+        ['NUMBER OF PALLETS', proformaData.shipment?.pallets?.length || 1]
     ];
 
-    // Olivos Logo ve Başlık
-    packingSheet.mergeCells('A1:D8');
-    const olivosLogo = packingSheet.getCell('A1');
-    olivosLogo.value = 'Olivos\nOLİVOS PAZARLAMA İÇ VE DIŞ TİCARET LTD ŞTİ.\nALİ ÇETİNKAYA BULVARI, NO:2\nKAT:5 ALSANCAK/İZMİR\nPHONE: +90 232 422 24 21\nFAX: +90 232 464 32 19';
-    olivosLogo.font = { name: 'Arial', size: 10, bold: true };
-    olivosLogo.alignment = { horizontal: 'left', vertical: 'top', wrapText: true };
+    summaryData.forEach(([label, value]) => {
+        const labelCell = packingSheet.getCell(`A${currentRow}`);
+        labelCell.value = label;
+        labelCell.font = { bold: true, size: 11, color: { argb: 'FF000000' } };
+        
+        const valueCell = packingSheet.getCell(`C${currentRow}`);
+        valueCell.value = value;
+        valueCell.font = { bold: true, size: 11, color: { argb: 'FF000000' } };
+        
+        currentRow++;
+    });
 
-    // PACKING LIST Başlığı
-    packingSheet.mergeCells('F10:I10');
-    const packingHeader = packingSheet.getCell('F10');
-    packingHeader.value = 'PACKING LIST';
-    packingHeader.font = { name: 'Arial', size: 16, bold: true };
-    packingHeader.alignment = { horizontal: 'center', vertical: 'middle' };
+    // Palet boyutları
+    if (proformaData.shipment?.pallets && proformaData.shipment.pallets.length > 0) {
+        proformaData.shipment.pallets.forEach(pallet => {
+            const labelCell = packingSheet.getCell(`A${currentRow}`);
+            labelCell.value = `PALLET - ${pallet.pallet_number}`;
+            labelCell.font = { bold: true, size: 11, color: { argb: 'FF000000' } };
+            
+            const valueCell = packingSheet.getCell(`C${currentRow}`);
+            valueCell.value = `${pallet.width_cm}x${pallet.length_cm}x${pallet.height_cm}`;
+            valueCell.font = { bold: true, size: 11, color: { argb: 'FF000000' } };
+            
+            currentRow++;
+        });
+    } else {
+        // Default palet
+        const labelCell = packingSheet.getCell(`A${currentRow}`);
+        labelCell.value = 'PALLET - 1';
+        labelCell.font = { bold: true, size: 11, color: { argb: 'FF000000' } };
+        
+        const valueCell = packingSheet.getCell(`C${currentRow}`);
+        valueCell.value = '80x120x124';
+        valueCell.font = { bold: true, size: 11, color: { argb: 'FF000000' } };
+        currentRow++;
+    }
 
-    // Başlıklar ve veriler...
-    // (Packing list detayları burada gelecek)
+    // Özet kısmının etrafına kalın çerçeve
+    const summaryEndRow = currentRow - 1;
+    const summaryRange = `A${summaryStartRow}:C${summaryEndRow}`;
+    
+    // Çerçeve uygula
+    for (let row = summaryStartRow; row <= summaryEndRow; row++) {
+        for (let col = 1; col <= 3; col++) {
+            const cell = packingSheet.getCell(row, col);
+            cell.border = {
+                top: row === summaryStartRow ? { style: 'thick' } : { style: 'thin' },
+                bottom: row === summaryEndRow ? { style: 'thick' } : { style: 'thin' },
+                left: col === 1 ? { style: 'thick' } : { style: 'thin' },
+                right: col === 3 ? { style: 'thick' } : { style: 'thin' }
+            };
+        }
+    }
 };
 
 // Yardımcı fonksiyonlar
