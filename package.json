@@ -27,6 +27,7 @@
     "react-is": "^18.3.1",
     "react-router-dom": "^7.6.3",
     "recharts": "^3.0.2",
+    "tailwind-scrollbar": "^4.0.2",
     "xlsx": "^0.18.5",
     "yup": "^1.6.1"
   },

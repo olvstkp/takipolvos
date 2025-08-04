@@ -1613,88 +1613,96 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
     };
 
     const handleSaveLogo = async () => {
-        if (!logo) {
-            toast.error('Lütfen bir logo seçin');
+        // Eğer logo seçilmemişse sadece adres güncellemesi yap
+        if (!logo && !logoPreview) {
+            toast.error('Lütfen bir logo seçin veya mevcut logo varsa adres güncellemesi yapabilirsiniz');
             return;
         }
 
         try {
             setUploading(true);
             
-            // 1. Storage bucket'ını kontrol et ve oluştur
-            const { data: buckets, error: listError } = await supabase.storage.listBuckets();
+            let logoUrl = logoPreview; // Mevcut logo URL'ini kullan
             
-            if (listError) {
-                console.error('Bucket listesi çekme hatası:', listError);
-            }
-            
-            const companyAssetsBucket = buckets?.find(bucket => bucket.name === 'company-assets');
-            
-            if (!companyAssetsBucket) {
-                // Bucket yoksa oluştur
-                const { error: bucketError } = await supabase.storage.createBucket('company-assets', {
-                    public: true,
-                    allowedMimeTypes: ['image/png', 'image/jpeg', 'image/jpg'],
-                    fileSizeLimit: 5242880 // 5MB
-                });
+            // Eğer yeni logo seçilmişse yükle
+            if (logo) {
+                // 1. Storage bucket'ını kontrol et ve oluştur
+                const { data: buckets, error: listError } = await supabase.storage.listBuckets();
                 
-                if (bucketError) {
-                    console.error('Bucket oluşturma hatası:', bucketError);
-                    // Bucket oluşturamıyorsak yine de devam et, belki zaten var
-                }
-            }
-
-            // 2. Dosya adını belirle
-            const fileExt = logo.name.split('.').pop();
-            const fileName = `company-logo.${fileExt}`;
-            
-            // 3. Mevcut logoyu sil (varsa)
-            await supabase.storage
-                .from('company-assets')
-                .remove([fileName]);
-
-            // 4. Yeni logoyu yükle
-            const { data: uploadData, error: uploadError } = await supabase.storage
-                .from('company-assets')
-                .upload(fileName, logo, {
-                    cacheControl: '3600',
-                    upsert: true
-                });
-
-            if (uploadError) {
-                console.error('Upload hatası detayı:', uploadError);
-                
-                // Eğer bucket hala yok hatası alıyorsak, manuel oluşturmayı dene
-                if (uploadError.message?.includes('Bucket not found')) {
-                    toast.error('Storage bucket bulunamadı. Lütfen Supabase panelinden "company-assets" bucket\'ını oluşturun.');
-                    return;
+                if (listError) {
+                    console.error('Bucket listesi çekme hatası:', listError);
                 }
                 
-                throw uploadError;
-            }
+                const companyAssetsBucket = buckets?.find(bucket => bucket.name === 'company-assets');
+                
+                if (!companyAssetsBucket) {
+                    // Bucket yoksa oluştur
+                    const { error: bucketError } = await supabase.storage.createBucket('company-assets', {
+                        public: true,
+                        allowedMimeTypes: ['image/png', 'image/jpeg', 'image/jpg'],
+                        fileSizeLimit: 5242880 // 5MB
+                    });
+                    
+                    if (bucketError) {
+                        console.error('Bucket oluşturma hatası:', bucketError);
+                        // Bucket oluşturamıyorsak yine de devam et, belki zaten var
+                    }
+                }
 
-            // 5. Public URL al
-            const { data: { publicUrl } } = supabase.storage
-                .from('company-assets')
-                .getPublicUrl(fileName);
+                // 2. Dosya adını belirle
+                const fileExt = logo.name.split('.').pop();
+                const fileName = `company-logo.${fileExt}`;
+                
+                // 3. Mevcut logoyu sil (varsa)
+                await supabase.storage
+                    .from('company-assets')
+                    .remove([fileName]);
+
+                // 4. Yeni logoyu yükle
+                const { data: uploadData, error: uploadError } = await supabase.storage
+                    .from('company-assets')
+                    .upload(fileName, logo, {
+                        cacheControl: '3600',
+                        upsert: true
+                    });
+
+                if (uploadError) {
+                    console.error('Upload hatası detayı:', uploadError);
+                    
+                    // Eğer bucket hala yok hatası alıyorsak, manuel oluşturmayı dene
+                    if (uploadError.message?.includes('Bucket not found')) {
+                        toast.error('Storage bucket bulunamadı. Lütfen Supabase panelinden "company-assets" bucket\'ını oluşturun.');
+                        return;
+                    }
+                    
+                    throw uploadError;
+                }
+
+                // 5. Public URL al
+                const { data: { publicUrl } } = supabase.storage
+                    .from('company-assets')
+                    .getPublicUrl(fileName);
+                    
+                logoUrl = publicUrl;
+            }
 
             // 6. Seçili şirketin kaydını güncelle
             const { error: updateError } = await supabase
                 .from('company_logo')
                 .update({ 
-                    logo_url: publicUrl,
+                    logo_url: logoUrl,
                     address: companyAddress
                 })
                 .eq('company_name', selectedCompany);
 
-            const { error: insertError } = updateError;
-
-            if (insertError) {
-                throw insertError;
+            if (updateError) {
+                throw updateError;
             }
 
             // 7. Backup için localStorage'a da kaydet
-            localStorage.setItem('proforma_logo', publicUrl);
+            if (logoUrl) {
+                localStorage.setItem('proforma_logo', logoUrl);
+            }
 
             toast.success('Logo başarıyla kaydedildi!');
             onClose();
@@ -1703,46 +1711,51 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
             console.error('Logo kaydetme hatası:', error);
             
             // Storage hatası varsa, fallback olarak base64'ü tabloya kaydet
-            try {
-                console.log('Storage hatası nedeniyle base64 fallback deneniyor...');
-                
-                // Logo'yu base64'e çevir
-                const reader = new FileReader();
-                reader.onload = async (e) => {
-                    const base64Data = e.target?.result as string;
+            if (logo) {
+                try {
+                    console.log('Storage hatası nedeniyle base64 fallback deneniyor...');
                     
-                    try {
-                        // Tabloyu güncelle (base64 data URL olarak) - Sadece seçili şirketin logo_url'ini güncelle
-                        const { error: insertError } = await supabase
-                            .from('company_logo')
-                            .update({ 
-                                logo_url: base64Data,
-                                address: companyAddress
-                            })
-                            .eq('company_name', selectedCompany);
+                    // Logo'yu base64'e çevir
+                    const reader = new FileReader();
+                    reader.onload = async (e) => {
+                        const base64Data = e.target?.result as string;
+                        
+                        try {
+                            // Tabloyu güncelle (base64 data URL olarak) - Sadece seçili şirketin logo_url'ini güncelle
+                            const { error: insertError } = await supabase
+                                .from('company_logo')
+                                .update({ 
+                                    logo_url: base64Data,
+                                    address: companyAddress
+                                })
+                                .eq('company_name', selectedCompany);
 
-                        if (insertError) {
-                            throw insertError;
+                            if (insertError) {
+                                throw insertError;
+                            }
+
+                            // Backup için localStorage'a da kaydet
+                            localStorage.setItem('proforma_logo', base64Data);
+                            setLogoPreview(base64Data);
+
+                            toast.success('Logo başarıyla kaydedildi! (Base64 formatında)');
+                            onClose();
+                        } catch (fallbackError: any) {
+                            console.error('Fallback kaydetme hatası:', fallbackError);
+                            toast.error(`Logo kaydedilemedi: ${fallbackError.message}`);
+                        } finally {
+                            setUploading(false);
                         }
-
-                        // Backup için localStorage'a da kaydet
-                        localStorage.setItem('proforma_logo', base64Data);
-                        setLogoPreview(base64Data);
-
-                        toast.success('Logo başarıyla kaydedildi! (Base64 formatında)');
-                        onClose();
-                    } catch (fallbackError: any) {
-                        console.error('Fallback kaydetme hatası:', fallbackError);
-                        toast.error(`Logo kaydedilemedi: ${fallbackError.message}`);
-                    } finally {
-                        setUploading(false);
-                    }
-                };
-                reader.readAsDataURL(logo);
-                return; // Ana catch bloğunu bitir
-            } catch (fallbackError) {
-                console.error('Fallback deneme hatası:', fallbackError);
-                toast.error(`Logo kaydedilirken hata: ${error.message || error}`);
+                    };
+                    reader.readAsDataURL(logo);
+                    return; // Ana catch bloğunu bitir
+                } catch (fallbackError) {
+                    console.error('Fallback deneme hatası:', fallbackError);
+                    toast.error(`Logo kaydedilirken hata: ${error.message || error}`);
+                }
+            } else {
+                // Sadece adres güncellemesi yapılıyorsa
+                toast.error(`Adres güncellenirken hata: ${error.message || error}`);
             }
         } finally {
             if (uploading) {
