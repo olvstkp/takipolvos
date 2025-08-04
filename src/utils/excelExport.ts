@@ -19,7 +19,12 @@ export interface ExcelExportData {
 export const generateProformaExcel = async (data: ExcelExportData) => {
     const { proformaData, selectedCustomer, products, selectedCompany = 'DASPI' } = data;
     
+    // Workbook'u daha güvenli şekilde oluştur
     const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Olivos Takip Sistemi';
+    workbook.lastModifiedBy = 'Olivos Takip Sistemi';
+    workbook.created = new Date();
+    workbook.modified = new Date();
     
     // SERILERIN RENK PALETİ - Belirgin renkler seri grupları için
     const seriesColors = [
@@ -51,28 +56,47 @@ export const generateProformaExcel = async (data: ExcelExportData) => {
         colorIndex++;
     });
 
-    await createInvoiceSheet(workbook, data, seriesColorMap);
-    await createCalismaSheet(workbook, data);
-    await createPackingListSheet(workbook, data);
+    try {
+        await createInvoiceSheet(workbook, data, seriesColorMap);
+        await createCalismaSheet(workbook, data);
+        await createPackingListSheet(workbook, data);
 
-    // Excel dosyasını kaydet
-    const buffer = await workbook.xlsx.writeBuffer();
-    const blob = new Blob([buffer], { 
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
-    });
-    
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${proformaData.proformaNumber}-Invoice.xlsx`;
-    link.click();
-    window.URL.revokeObjectURL(url);
+        // Excel dosyasını kaydet - daha güvenli yöntem
+        const buffer = await workbook.xlsx.writeBuffer();
+        
+        // Blob oluştururken daha spesifik MIME type kullan
+        const blob = new Blob([buffer], { 
+            type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=UTF-8' 
+        });
+        
+        // Dosya adını temizle (geçersiz karakterleri kaldır)
+        const cleanFileName = proformaData.proformaNumber.replace(/[^a-zA-Z0-9-_]/g, '_');
+        
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `${cleanFileName}-Invoice.xlsx`;
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
+    } catch (error) {
+        console.error('Excel oluşturma hatası:', error);
+        throw new Error('Excel dosyası oluşturulamadı');
+    }
 };
 
 export const generateProductsExcel = async (data: ProductExportData) => {
     const { products, currency } = data;
     
+    // Workbook'u daha güvenli şekilde oluştur
     const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Olivos Takip Sistemi';
+    workbook.lastModifiedBy = 'Olivos Takip Sistemi';
+    workbook.created = new Date();
+    workbook.modified = new Date();
+    
     const sheet = workbook.addWorksheet('Ürünler');
     
     // Sütun başlıkları
@@ -137,18 +161,28 @@ export const generateProductsExcel = async (data: ProductExportData) => {
         }
     });
     
-    // Excel dosyasını kaydet
-    const buffer = await workbook.xlsx.writeBuffer();
-    const blob = new Blob([buffer], { 
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
-    });
-    
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `Ürünler_${new Date().toISOString().split('T')[0]}.xlsx`;
-    link.click();
-    window.URL.revokeObjectURL(url);
+    // Excel dosyasını kaydet - daha güvenli yöntem
+    try {
+        const buffer = await workbook.xlsx.writeBuffer();
+        
+        // Blob oluştururken daha spesifik MIME type kullan
+        const blob = new Blob([buffer], { 
+            type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=UTF-8' 
+        });
+        
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `Ürünler_${new Date().toISOString().split('T')[0]}.xlsx`;
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
+    } catch (error) {
+        console.error('Excel oluşturma hatası:', error);
+        throw new Error('Excel dosyası oluşturulamadı');
+    }
 };
 
 // INVOICE SHEET - Resimle birebir aynı
@@ -166,85 +200,10 @@ const createInvoiceSheet = async (workbook: ExcelJS.Workbook, data: ExcelExportD
         { key: 'F', width: 15 }, // INVOICE başlığı için
     ];
 
-    // Logo ekle A1 hücresine (Supabase'den çek)
-    try {
-        // Seçili şirketin logo ve adres bilgilerini çek
-        const { supabase } = await import('../lib/supabase');
-        const { data: logoData, error } = await supabase
-            .from('company_logo')
-            .select('logo_url, address, company_name')
-            .eq('company_name', selectedCompany)
-            .single();
+    // Logo ekleme kısmını kaldırdık - Excel bozulmasına neden oluyordu
+    // Sadece adres bilgileri gösterilecek
 
-        if (logoData && !error && logoData.logo_url) {
-            let logoBuffer: ArrayBuffer;
-            let logoExtension: string = 'png';
-            
-            try {
-                if (logoData.logo_url.startsWith('data:')) {
-                    // Base64 data URL
-                    console.log('Base64 logo bulundu, işleniyor...');
-                    const base64Data = logoData.logo_url.split(',')[1];
-                    const binaryString = atob(base64Data);
-                    const bytes = new Uint8Array(binaryString.length);
-                    for (let i = 0; i < binaryString.length; i++) {
-                        bytes[i] = binaryString.charCodeAt(i);
-                    }
-                    logoBuffer = bytes.buffer;
-                    
-                    // MIME type'tan extension belirle
-                    if (logoData.logo_url.includes('image/jpeg') || logoData.logo_url.includes('image/jpg')) {
-                        logoExtension = 'jpeg';
-                    } else if (logoData.logo_url.includes('image/png')) {
-                        logoExtension = 'png';
-                    }
-                } else {
-                    // Normal URL (Storage'dan)
-                    console.log('Storage URL\'si bulundu, fetch ediliyor...');
-                    const logoResponse = await fetch(logoData.logo_url);
-                    if (!logoResponse.ok) {
-                        throw new Error(`Logo fetch hatası: ${logoResponse.status}`);
-                    }
-                    
-                    const logoBlob = await logoResponse.blob();
-                    logoBuffer = await logoBlob.arrayBuffer();
-                    
-                    // URL'den extension belirle
-                    logoExtension = logoData.logo_url.includes('.png') ? 'png' : 
-                                  logoData.logo_url.includes('.jpg') || logoData.logo_url.includes('.jpeg') ? 'jpeg' : 'png';
-                }
-                
-                // Excel'e resim ekle
-                const imageId = workbook.addImage({
-                    buffer: logoBuffer,
-                    extension: logoExtension as 'png' | 'jpeg' | 'gif',
-                });
-                
-                // Logo'yu A1 hücresine koy (2 satır yüksekliğinde)
-                invoiceSheet.addImage(imageId, {
-                    tl: { col: 0, row: 0 }, // A1 hücresi (col 0, row 0)
-                    ext: { width: 160, height: 80 }, // Logo boyutu büyütüldü
-                    editAs: 'absolute'
-                });
-                
-                // Logo için A1 ve A2 hücresinin yüksekliğini artır (2 satır)
-                invoiceSheet.getRow(1).height = 40;
-                invoiceSheet.getRow(2).height = 40;
-                console.log('Logo başarıyla A1 hücresine eklendi (Tip:', logoExtension, ')');
-                
-            } catch (logoError) {
-                console.error('Logo işleme hatası:', logoError);
-            }
-        } else {
-            console.log('Logo bulunamadı, adres bilgileri gösterilecek');
-        }
-    } catch (error) {
-        console.error('Logo ekleme hatası:', error);
-    }
-
-    // Şirket adres bilgileri (Sol üst - Logo yoksa gösterilecek)
-    // Logo varsa bu bilgiler A3'ten başlayacak
-    let addressStartRow = 1;
+    // Şirket adres bilgileri (Sol üst)
     let companyAddress = `DUATEPE MAH.YENİTABAKHANE CAD.OLİVOS APT NO:2
 TİRE / İZMİR
 TEL: 0266 3921356`; // Default DASPI adresi
@@ -254,12 +213,12 @@ TEL: 0266 3921356`; // Default DASPI adresi
         const { supabase } = await import('../lib/supabase');
         const { data: companyData } = await supabase
             .from('company_logo')
-            .select('logo_url, address')
+            .select('address')
             .eq('company_name', selectedCompany)
             .single();
         
-        if (companyData?.logo_url) {
-            addressStartRow = 3; // Logo varsa adres A3'ten başlar (logo 2 satır)
+        if (companyData?.address) {
+            companyAddress = companyData.address;
         }
         
         if (companyData?.address) {
@@ -273,7 +232,7 @@ TEL: 0266 3921356`; // Default DASPI adresi
     // Şirket adres bilgilerini satırlara böl ve ekle
     const addressLines = companyAddress.split('\n');
     addressLines.forEach((line, index) => {
-        const addressCell = invoiceSheet.getCell(`A${addressStartRow + index}`);
+        const addressCell = invoiceSheet.getCell(`A${1 + index}`);
         addressCell.value = line.trim();
         addressCell.font = { color: { argb: 'FF808000' }, size: 10 }; // #808000 renk
     });

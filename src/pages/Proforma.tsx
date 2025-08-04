@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { supabase } from '../lib/supabase';
 import ProformaGenerator from './ProformaGenerator';
 import * as XLSX from 'xlsx';
+import { generateProformaExcel } from '../utils/excelExport';
 
 interface ProformaListItem {
     id: string;
@@ -332,50 +333,96 @@ const Proforma: React.FC = () => {
     };
 
     const handleDownload = async (proformaId: string) => {
-        const detail = await fetchProformaDetail(proformaId);
-        if (!detail) return;
+        try {
+            const detail = await fetchProformaDetail(proformaId);
+            if (!detail) {
+                toast.error('Proforma detayları yüklenemedi');
+                return;
+            }
 
-        // Excel dosyası oluştur
-        const workbook = XLSX.utils.book_new();
-        
-        // Proforma bilgileri
-        const proformaInfo = [
-            ['Proforma Numarası', detail.proforma_number],
-            ['Tarih', new Date(detail.issue_date).toLocaleDateString('tr-TR')],
-            ['Geçerlilik', new Date(detail.validity_date).toLocaleDateString('tr-TR')],
-            ['Durum', detail.status],
-            ['Ödeme', detail.payment_method],
-            ['Teslimat', detail.delivery],
-            [''],
-            ['Müşteri Bilgileri'],
-            ['Ad', detail.customer.name],
-            ['Adres', detail.customer.address],
-            ['Vergi No', detail.customer.tax_id],
-            ['İletişim', detail.customer.contact_person],
-            ['Telefon', detail.customer.phone],
-            ['E-posta', detail.customer.email],
-            [''],
-            ['Ürün Listesi']
-        ];
+            // Ürünleri çek
+            const { data: products, error: productsError } = await supabase
+                .from('products')
+                .select(`
+                    *,
+                    series (
+                        id,
+                        name,
+                        pieces_per_case,
+                        net_weight_kg_per_piece,
+                        packaging_weight_kg_per_case
+                    )
+                `);
 
-        // Ürün başlıkları
-        const itemHeaders = ['Ürün Adı', 'Miktar', 'Birim', 'Birim Fiyat', 'Toplam'];
-        
-        // Ürün verileri
-        const itemData = detail.proforma_items.map(item => [
-            item.product?.name || 'Ürün Bulunamadı',
-            item.quantity,
-            item.unit === 'case' ? 'Koli' : 'Adet',
-            `€${item.unit_price.toFixed(2)}`,
-            `€${item.total.toFixed(2)}`
-        ]);
+            if (productsError) {
+                console.error('Ürünler yüklenirken hata:', productsError);
+                toast.error('Ürün bilgileri yüklenemedi');
+                return;
+            }
 
-        const sheetData = [...proformaInfo, itemHeaders, ...itemData, [''], ['Toplam Tutar', `€${detail.total_amount.toFixed(2)}`]];
-        
-        const worksheet = XLSX.utils.aoa_to_sheet(sheetData);
-        XLSX.utils.book_append_sheet(workbook, worksheet, 'Proforma');
-        
-        XLSX.writeFile(workbook, `proforma_${detail.proforma_number}.xlsx`);
+            // Proforma gruplarını çek
+            const { data: proformaGroups, error: groupsError } = await supabase
+                .from('proforma_groups')
+                .select('*');
+
+            if (groupsError) {
+                console.error('Proforma grupları yüklenirken hata:', groupsError);
+            }
+
+            // Proforma verilerini ExcelExportData formatına dönüştür
+            const proformaData = {
+                id: detail.id,
+                proformaNumber: detail.proforma_number,
+                customerId: detail.customer_id,
+                issueDate: detail.issue_date,
+                validityDate: detail.validity_date,
+                items: detail.proforma_items.map(item => ({
+                    productId: item.product_id,
+                    description: item.description || item.product?.name || '',
+                    quantity: item.quantity,
+                    unitPrice: item.unit_price,
+                    total: item.total,
+                    unit: item.unit
+                })),
+                totalAmount: detail.total_amount,
+                paymentMethod: detail.payment_method,
+                bankInfo: {
+                    bankName: 'İŞ BANKASI',
+                    branch: 'EDREMİT / BALIKESİR ŞUBE',
+                    swiftCode: 'ISBKTRISXXX',
+                    accountNumber: 'TR 95 0006 4000 0022 1230 7227 02'
+                },
+                notes: detail.notes || 'Plus/Minus 10 percent in quantity and amount will be allowed',
+                departure: 'İzmir-FOB',
+                delivery: detail.delivery,
+                brand: 'DASPI',
+                shipment: {
+                    weight_per_pallet_kg: detail.weight_per_pallet_kg,
+                    pallets: detail.pallets.map(pallet => ({
+                        pallet_number: pallet.pallet_number,
+                        width_cm: pallet.width_cm,
+                        length_cm: pallet.length_cm,
+                        height_cm: pallet.height_cm
+                    }))
+                }
+            };
+
+            // Excel export fonksiyonunu çağır
+            await generateProformaExcel({
+                proformaData,
+                selectedCustomer: detail.customer,
+                products: products || [],
+                proformaGroups: proformaGroups || [],
+                packingListCalculations: [], // Boş bırakılabilir
+                currency: 'EUR',
+                selectedCompany: 'DASPI'
+            });
+
+            toast.success('Proforma başarıyla indirildi!');
+        } catch (error) {
+            console.error('Proforma indirme hatası:', error);
+            toast.error('Proforma indirilirken hata oluştu');
+        }
     };
 
     const updateProforma = async (updatedData: Partial<ProformaDetail>) => {
