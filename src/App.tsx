@@ -2,6 +2,7 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import Layout from './components/Layout';
+import ErrorBoundary from './components/ErrorBoundary';
 import Dashboard from './pages/Dashboard';
 import StockManagement from './pages/StockManagement';
 import StockMovements from './pages/StockMovements';
@@ -18,8 +19,9 @@ import Settings from './pages/Settings';
 
 function App() {
   return (
-    <Router>
-      <Layout>
+    <ErrorBoundary>
+      <Router>
+        <Layout>
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/dashboard" element={<Dashboard />} />
@@ -67,7 +69,8 @@ function App() {
           },
         }}
       />
-    </Router>
+      </Router>
+    </ErrorBoundary>
   );
 }
 

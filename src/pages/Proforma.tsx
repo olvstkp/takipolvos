@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { FileText, Plus, Eye, Edit, Download, Trash2, X, Save, Calendar, User, DollarSign, Package, Settings } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { supabase } from '../lib/supabase';
+import ErrorBoundary from '../components/ErrorBoundary';
 import ProformaGenerator from './ProformaGenerator';
 import * as XLSX from 'xlsx';
 import { generateProformaExcel } from '../utils/excelExport';
@@ -2043,67 +2044,95 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
     };
 
     const handleSavePayment = async () => {
-        // En az EUR için temel bilgilerin dolu olduğunu kontrol et
-        if (!paymentInfo.eur.bankName || !paymentInfo.eur.swiftCode || !paymentInfo.eur.accountNumber) {
-            toast.error('Lütfen EUR için zorunlu alanları doldurun!');
-            return;
-        }
-
-        setSavingPayment(true);
-        const toastId = toast.loading('Ödeme bilgileri kaydediliyor...');
-
         try {
-            // Önce mevcut kayıt var mı kontrol et
-            const { data: existingData } = await supabase
-                .from('company_payment')
-                .select('id')
-                .eq('company_name', selectedCompany)
-                .single();
-
-            const paymentData = {
-                company_name: selectedCompany,
-                // EUR bilgileri
-                bank_name: paymentInfo.eur.bankName,
-                branch: paymentInfo.eur.branch,
-                branch_code: paymentInfo.eur.branchCode,
-                swift_code: paymentInfo.eur.swiftCode,
-                account_name: paymentInfo.eur.accountName,
-                account_number: paymentInfo.eur.accountNumber,
-                // USD bilgileri
-                bank_name_usd: paymentInfo.usd.bankName,
-                branch_usd: paymentInfo.usd.branch,
-                branch_code_usd: paymentInfo.usd.branchCode,
-                swift_code_usd: paymentInfo.usd.swiftCode,
-                account_name_usd: paymentInfo.usd.accountName,
-                account_number_usd: paymentInfo.usd.accountNumber
-            };
-
-            console.log('Kaydedilecek ödeme bilgileri:', paymentData);
-            console.log('Aktif tab:', activePaymentTab);
-            console.log('PaymentInfo state:', paymentInfo);
-
-            if (existingData) {
-                // Güncelle
-                const { error } = await supabase
-                    .from('company_payment')
-                    .update(paymentData)
-                    .eq('company_name', selectedCompany);
-
-                if (error) throw error;
-            } else {
-                // Yeni kayıt ekle
-                const { error } = await supabase
-                    .from('company_payment')
-                    .insert([paymentData]);
-
-                if (error) throw error;
+            // En az EUR için temel bilgilerin dolu olduğunu kontrol et
+            if (!paymentInfo?.eur?.bankName || !paymentInfo?.eur?.swiftCode || !paymentInfo?.eur?.accountNumber) {
+                toast.error('Lütfen EUR için zorunlu alanları doldurun!');
+                return;
             }
 
-            toast.success('Ödeme bilgileri başarıyla kaydedildi!', { id: toastId });
-        } catch (error: any) {
-            console.error('Ödeme bilgisi kaydetme hatası:', error);
-            toast.error(`Hata: ${error.message}`, { id: toastId });
-        } finally {
+            setSavingPayment(true);
+            const toastId = toast.loading('Ödeme bilgileri kaydediliyor...');
+
+            try {
+                // Önce mevcut kayıt var mı kontrol et
+                const { data: existingData, error: selectError } = await supabase
+                    .from('company_payment')
+                    .select('id')
+                    .eq('company_name', selectedCompany)
+                    .single();
+
+                // SelectError'u logla ama devam et (kayıt yoksa hata normal)
+                if (selectError && selectError.code !== 'PGRST116') {
+                    console.warn('Mevcut kayıt sorgulamasında uyarı:', selectError);
+                }
+
+                const paymentData = {
+                    company_name: selectedCompany,
+                    // EUR bilgileri
+                    bank_name: paymentInfo.eur.bankName || '',
+                    branch: paymentInfo.eur.branch || '',
+                    branch_code: paymentInfo.eur.branchCode || '',
+                    swift_code: paymentInfo.eur.swiftCode || '',
+                    account_name: paymentInfo.eur.accountName || '',
+                    account_number: paymentInfo.eur.accountNumber || '',
+                    // USD bilgileri
+                    bank_name_usd: paymentInfo.usd?.bankName || '',
+                    branch_usd: paymentInfo.usd?.branch || '',
+                    branch_code_usd: paymentInfo.usd?.branchCode || '',
+                    swift_code_usd: paymentInfo.usd?.swiftCode || '',
+                    account_name_usd: paymentInfo.usd?.accountName || '',
+                    account_number_usd: paymentInfo.usd?.accountNumber || ''
+                };
+
+                let saveResult;
+                if (existingData?.id) {
+                    // Güncelle
+                    saveResult = await supabase
+                        .from('company_payment')
+                        .update(paymentData)
+                        .eq('company_name', selectedCompany);
+                } else {
+                    // Yeni kayıt ekle
+                    saveResult = await supabase
+                        .from('company_payment')
+                        .insert([paymentData]);
+                }
+
+                if (saveResult.error) {
+                    throw new Error(`Database hatası: ${saveResult.error.message}`);
+                }
+
+                toast.success('Ödeme bilgileri başarıyla kaydedildi!', { id: toastId });
+                
+            } catch (dbError: any) {
+                console.error('Database işlem hatası:', dbError);
+                
+                // Specific error types için özel mesajlar
+                if (dbError.code === '23505') {
+                    toast.error('Bu şirket için ödeme bilgisi zaten mevcut!', { id: toastId });
+                } else if (dbError.code === '42P01') {
+                    toast.error('Veritabanı tablosu bulunamadı!', { id: toastId });
+                } else if (dbError.message?.includes('network')) {
+                    toast.error('İnternet bağlantısı problemi. Lütfen tekrar deneyin.', { id: toastId });
+                } else if (dbError.message?.includes('permission')) {
+                    toast.error('Yetki hatası. Lütfen yöneticinizle iletişime geçin.', { id: toastId });
+                } else {
+                    toast.error(`Kaydetme hatası: ${dbError.message || 'Bilinmeyen hata'}`, { id: toastId });
+                }
+            } finally {
+                setSavingPayment(false);
+            }
+            
+        } catch (generalError: any) {
+            console.error('Genel hata:', generalError);
+            toast.error('Beklenmeyen bir hata oluştu. Sayfa yenilenerek düzeltilecek.');
+            
+            // 2 saniye bekle ve sayfayı yenile
+            setTimeout(() => {
+                window.location.reload();
+            }, 2000);
+            
             setSavingPayment(false);
         }
     };
@@ -2138,12 +2167,13 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
     };
 
     return (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-2xl mx-4 shadow-xl max-h-[90vh] overflow-y-auto">
-                <div className="flex items-center justify-between mb-6">
-                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center">
-                        <Settings className="w-5 h-5 mr-2" />
-                        Şirket Ayarları
+        <ErrorBoundary>
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-2xl mx-4 shadow-xl max-h-[90vh] overflow-y-auto">
+                    <div className="flex items-center justify-between mb-6">
+                        <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center">
+                            <Settings className="w-5 h-5 mr-2" />
+                            Şirket Ayarları
                     </h3>
                     <button
                         onClick={onClose}
@@ -2488,7 +2518,8 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
                     </button>
                 </div>
             </div>
-        </div>
+            </div>
+        </ErrorBoundary>
     );
 };
 

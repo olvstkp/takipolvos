@@ -174,14 +174,15 @@ const createInvoiceSheet = async (workbook: ExcelJS.Workbook, data: ExcelExportD
     const { proformaData, selectedCustomer, products, currency, selectedCompany = 'DASPI', paymentInfo } = data;
     const invoiceSheet = workbook.addWorksheet('INVOICE');
     
-    // Sütun genişlikleri - resimle uyumlu (A-D ana tablo, E-F sağ taraf)
+    // Sütun genişlikleri - PIECE sütunu eklendi
     invoiceSheet.columns = [
         { key: 'A', width: 15 }, // QUANTITY/CASE
-        { key: 'B', width: 50 }, // PRODUCT DESCRIPTION  
-        { key: 'C', width: 18 }, // UNIT PRICE
-        { key: 'D', width: 18 }, // TOTAL AMOUNT
-        { key: 'E', width: 17.5 }, // Logo için genişletildi (%250 = 5 * 3.5 = 17.5)
-        { key: 'F', width: 35 }, // ACCOUNT NUMBER için genişletildi
+        { key: 'B', width: 12 }, // PIECE 
+        { key: 'C', width: 50 }, // PRODUCT DESCRIPTION  
+        { key: 'D', width: 18 }, // UNIT PRICE
+        { key: 'E', width: 18 }, // TOTAL AMOUNT
+        { key: 'F', width: 17.5 }, // Logo için genişletildi (%250 = 5 * 3.5 = 17.5)
+        { key: 'G', width: 35 }, // ACCOUNT NUMBER için genişletildi
     ];
 
     // Logo ekle A1 hücresine (Supabase'den çek)
@@ -297,8 +298,8 @@ TEL: 0266 3921356`; // Default DASPI adresi
     });
 
     // PROFORMA INVOICE başlığı (Sağ üst - genişletilmiş alan)
-    invoiceSheet.mergeCells('D1:G1');
-    const invoiceHeader = invoiceSheet.getCell('D1');
+    invoiceSheet.mergeCells('E1:G1');
+    const invoiceHeader = invoiceSheet.getCell('E1');
     invoiceHeader.value = 'PROFORMA INVOICE';
     invoiceHeader.font = { name: 'Arial', size: 26, bold: true };
     invoiceHeader.alignment = { horizontal: 'center', vertical: 'middle' };
@@ -307,7 +308,7 @@ TEL: 0266 3921356`; // Default DASPI adresi
     invoiceSheet.getRow(1).height = 35;
 
     // Tarih bilgisi (sağ üst altında)
-    invoiceSheet.getCell('E2').value = new Date().toLocaleDateString('en-GB');
+    invoiceSheet.getCell('F2').value = new Date().toLocaleDateString('en-GB');
     
 
     // Müşteri bilgileri bölümü (Database'den gelen veriler)
@@ -376,9 +377,9 @@ TEL: 0266 3921356`; // Default DASPI adresi
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
     });
 
-    // Ürün tablosu başlıkları - Resimle birebir aynı mavi renk
+    // Ürün tablosu başlıkları - PIECE sütunu eklendi
     const productHeaderRow = 20;
-    const productHeaders = ['QUANTITY/CASE', 'PRODUCT DESCRIPTION', `UNIT PRICE\n(${currency})`, `TOTAL AMOUNT\n(${currency})`];
+    const productHeaders = ['QUANTITY/CASE', 'PIECE', 'PRODUCT DESCRIPTION', `UNIT PRICE\n(${currency})`, `TOTAL AMOUNT\n(${currency})`];
     productHeaders.forEach((header, index) => {
         const cell = invoiceSheet.getCell(productHeaderRow, index + 1);
         cell.value = header;
@@ -410,8 +411,13 @@ TEL: 0266 3921356`; // Default DASPI adresi
             cellColor = 'FFFF00'; // Sarı
         }
 
+        // PIECE hesaplama - koli sayısı × koli başına adet
+        const pcsPerCase = product?.piecesPerCase || 0;
+        const totalPieces = pcsPerCase > 0 ? item.quantity * pcsPerCase : 0;
+        
         const rowData = [
             item.quantity,
+            totalPieces > 0 ? totalPieces : '', // PIECE sütunu
             item.description,
             parseFloat(item.unitPrice.toFixed(2)),
             parseFloat(item.total.toFixed(2))
@@ -426,12 +432,14 @@ TEL: 0266 3921356`; // Default DASPI adresi
                 bottom: { style: 'thin' }, right: { style: 'thin' }
             };
             
-            // Alignment - resimde gösterildiği gibi
-            if (colIndex === 0) {
+            // Alignment - PIECE sütunu için güncellendi
+            if (colIndex === 0) { // QUANTITY/CASE
                 cell.alignment = { horizontal: 'center', vertical: 'middle' };
-            } else if (colIndex === 1) {
+            } else if (colIndex === 1) { // PIECE
+                cell.alignment = { horizontal: 'center', vertical: 'middle' };
+            } else if (colIndex === 2) { // PRODUCT DESCRIPTION
                 cell.alignment = { horizontal: 'left', vertical: 'middle' };
-            } else {
+            } else { // UNIT PRICE ve TOTAL AMOUNT
                 cell.alignment = { horizontal: 'right', vertical: 'middle' };
                 cell.numFmt = '#,##0.00'; // Para formatı
             }
@@ -449,7 +457,7 @@ TEL: 0266 3921356`; // Default DASPI adresi
     if (freeItems.length > 0) {
         // Ücretsiz ürünler varsa NO COMMERCIAL VALUE satırlarını ekle
         for (let i = 0; i < Math.min(freeItems.length, 3); i++) {
-            const noCommercialRow = ['', 'NO COMMERCIAL VALUE', 'NO COMMERCIAL VALUE', 'NO COMMERCIAL VALUE'];
+            const noCommercialRow = ['', '', 'NO COMMERCIAL VALUE', 'NO COMMERCIAL VALUE', 'NO COMMERCIAL VALUE'];
             noCommercialRow.forEach((value, colIndex) => {
                 const cell = invoiceSheet.getCell(currentRow, colIndex + 1);
                 cell.value = value;
@@ -466,7 +474,7 @@ TEL: 0266 3921356`; // Default DASPI adresi
     }
 
     // TOTAL satırı - Gri renkte tüm satır
-    const totalRow = ['', '', 'TOTAL', parseFloat(proformaData.totalAmount.toFixed(2))];
+    const totalRow = ['', '', '', 'TOTAL', parseFloat(proformaData.totalAmount.toFixed(2))];
     totalRow.forEach((value, colIndex) => {
         const cell = invoiceSheet.getCell(currentRow, colIndex + 1);
         cell.value = value;
@@ -477,9 +485,9 @@ TEL: 0266 3921356`; // Default DASPI adresi
             bottom: { style: 'thick' }, right: { style: 'thin' }
         };
         
-        if (colIndex === 2) {
+        if (colIndex === 3) { // TOTAL yazısı
             cell.alignment = { horizontal: 'center', vertical: 'middle' };
-        } else if (colIndex === 3) {
+        } else if (colIndex === 4) { // TOTAL amount
             cell.alignment = { horizontal: 'right', vertical: 'middle' };
             cell.numFmt = '#,##0.00';
         } else {
@@ -548,8 +556,8 @@ TEL: 0266 3921356`; // Default DASPI adresi
     
     currentRow += 2;
     
-    // Banka bilgileri tablosu (resimde gösterildiği gibi)
-    const bankingHeaders = ['BANK', 'BRANCH', 'BRANCH CODE', 'SWIFT CODE', 'ACCOUNT NAME', 'ACCOUNT NUMBER'];
+    // Banka bilgileri tablosu (resimde gösterildiği gibi) - 7 sütuna genişletildi
+    const bankingHeaders = ['BANK', 'BRANCH', 'BRANCH CODE', 'SWIFT CODE', 'ACCOUNT NAME', 'ACCOUNT NUMBER', ''];
     bankingHeaders.forEach((header, index) => {
         const cell = invoiceSheet.getCell(currentRow, index + 1);
         cell.value = header;
@@ -573,7 +581,8 @@ TEL: 0266 3921356`; // Default DASPI adresi
         currentCurrencyPayment?.branchCode || 'ISBTRXXX',
         currentCurrencyPayment?.swiftCode || 'ISBKTRISXXX',
         currentCurrencyPayment?.accountName || 'OLIVE VE TİCARET',
-        currentCurrencyPayment?.accountNumber || (currency === 'USD' ? 'USD: TR 95 0006 4000 0022 1230 7227 03' : 'TR 95 0006 4000 0022 1230 7227 02')
+        currentCurrencyPayment?.accountNumber || (currency === 'USD' ? 'USD: TR 95 0006 4000 0022 1230 7227 03' : 'TR 95 0006 4000 0022 1230 7227 02'),
+        '' // Boş 7. sütun
     ];
     
     bankingValues.forEach((value, index) => {
@@ -589,7 +598,7 @@ TEL: 0266 3921356`; // Default DASPI adresi
 
     // Thank you mesajı
     currentRow += 3;
-    invoiceSheet.mergeCells(`A${currentRow}:D${currentRow}`);
+    invoiceSheet.mergeCells(`A${currentRow}:E${currentRow}`);
     const thankYouCell = invoiceSheet.getCell(currentRow, 1);
     thankYouCell.value = 'THANK YOU FOR YOUR BUSINESS!';
     thankYouCell.font = { bold: true, size: 14 };
