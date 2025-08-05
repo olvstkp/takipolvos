@@ -459,26 +459,11 @@ const Proforma: React.FC = () => {
                 proforma_group: product.proforma_group
             }));
 
-            // Şirket bilgilerini DB'den çek
+            // Şirket bilgilerini localStorage'dan al
             const savedCompany = localStorage.getItem('selected_company') || 'DASPI';
-            let companyData = { name: savedCompany, address: '', logo_url: null };
             let paymentData = null;
             
             try {
-                const { data: companyResult, error: companyError } = await supabase
-                    .from('company_logo')
-                    .select('company_name, address, logo_url')
-                    .eq('company_name', savedCompany)
-                    .single();
-
-                if (companyResult && !companyError) {
-                    companyData = {
-                        name: companyResult.company_name,
-                        address: companyResult.address || '',
-                        logo_url: companyResult.logo_url
-                    };
-                }
-
                 // Ödeme bilgilerini çek
                 const { data: paymentResult, error: paymentError } = await supabase
                     .from('company_payment')
@@ -532,7 +517,7 @@ const Proforma: React.FC = () => {
                 proformaGroups: proformaGroupsData || [],
                 packingListCalculations,
                 currency: proformaData.currency || 'EUR', // Proforma'dan currency'i al
-                selectedCompany: companyData,
+                selectedCompany: savedCompany, // String olarak gönder, ExcelExport DB'den logo çekecek
                 paymentInfo: paymentData
             });
 
@@ -2168,11 +2153,11 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
 
     return (
         <ErrorBoundary>
-            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
                 <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-2xl mx-4 shadow-xl max-h-[90vh] overflow-y-auto">
-                    <div className="flex items-center justify-between mb-6">
-                        <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center">
-                            <Settings className="w-5 h-5 mr-2" />
+                <div className="flex items-center justify-between mb-6">
+                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center">
+                        <Settings className="w-5 h-5 mr-2" />
                             Şirket Ayarları
                     </h3>
                     <button
@@ -2518,7 +2503,7 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
                     </button>
                 </div>
             </div>
-            </div>
+        </div>
         </ErrorBoundary>
     );
 };

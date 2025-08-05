@@ -169,6 +169,144 @@ export const generateProductsExcel = async (data: ProductExportData) => {
     window.URL.revokeObjectURL(url);
 };
 
+// Customer Export Interface
+export interface CustomerExportData {
+    customers: any[];
+}
+
+export const generateCustomersExcel = async (data: CustomerExportData) => {
+    const { customers } = data;
+    
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Müşteriler');
+    
+    // Sütun başlıkları - Import için uyumlu
+    sheet.columns = [
+        { key: 'A', width: 35, header: 'MÜŞTERİ ADI' },
+        { key: 'B', width: 50, header: 'ADRES' },
+        { key: 'C', width: 20, header: 'VERGİ NO' },
+        { key: 'D', width: 25, header: 'İLETİŞİM KİŞİSİ' },
+        { key: 'E', width: 20, header: 'TELEFON' },
+        { key: 'F', width: 20, header: 'TELEFON 2' },
+        { key: 'G', width: 30, header: 'E-POSTA' },
+        { key: 'H', width: 20, header: 'TESLİMAT' },
+        { key: 'I', width: 20, header: 'OLUŞTURULMA TARİHİ' }
+    ];
+    
+    // Başlık satırını formatla
+    const headerRow = sheet.getRow(1);
+    headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    headerRow.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF4F81BD' }
+    };
+    
+    // Veri satırlarını ekle
+    customers.forEach((customer: any, index) => {
+        const row = sheet.getRow(index + 2);
+        row.values = [
+            customer.name,
+            customer.address,
+            customer.tax_id || customer.taxId,
+            customer.contact_person || customer.contactPerson,
+            customer.phone,
+            customer.phone2 || '',
+            customer.email,
+            customer.delivery,
+            new Date(customer.created_at || Date.now()).toLocaleDateString('tr-TR')
+        ];
+        
+        // Alternatif satır renklendirmesi
+        if (index % 2 === 1) {
+            row.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: 'FFF5F5F5' }
+            };
+        }
+    });
+    
+    // Excel dosyasını kaydet
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { 
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
+    });
+    
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `Müşteriler_${new Date().toISOString().split('T')[0]}.xlsx`;
+    link.click();
+    window.URL.revokeObjectURL(url);
+};
+
+// Müşteri Import Şablonu Oluştur
+export const generateCustomerTemplate = async () => {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Müşteri Şablonu');
+    
+    // Sadece sütun başlıkları
+    const headers = [
+        'MÜŞTERİ ADI',
+        'ADRES', 
+        'VERGİ NO',
+        'İLETİŞİM KİŞİSİ',
+        'TELEFON',
+        'TELEFON 2',
+        'E-POSTA',
+        'TESLİMAT'
+    ];
+    
+    // Başlık satırını ekle - renksiz
+    const headerRow = sheet.addRow(headers);
+    headerRow.font = { bold: true };
+    
+    // Örnek veri satırı ekle
+    const exampleRow = sheet.addRow([
+        'ÖRNEK MÜŞTERİ A.Ş.',
+        'Örnek Mahallesi, Örnek Sokak No:123, İstanbul',
+        'TR123456789',
+        'Ahmet Yılmaz',
+        '+90 212 555 0123',
+        '+90 532 555 0123',
+        'ahmet@ornek.com',
+        'TÜRKİYE'
+    ]);
+    
+    // Örnek satırı gri yap
+    exampleRow.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFF0F0F0' }
+    };
+    
+    // Sütun genişliklerini ayarla
+    sheet.columns = [
+        { width: 35 },
+        { width: 50 },
+        { width: 20 },
+        { width: 25 },
+        { width: 20 },
+        { width: 20 },
+        { width: 30 },
+        { width: 20 }
+    ];
+    
+    // Excel dosyasını kaydet
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { 
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
+    });
+    
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `Müşteri_Şablonu_${new Date().toISOString().split('T')[0]}.xlsx`;
+    link.click();
+    window.URL.revokeObjectURL(url);
+};
+
 // INVOICE SHEET - Resimle birebir aynı
 const createInvoiceSheet = async (workbook: ExcelJS.Workbook, data: ExcelExportData, seriesColorMap: Map<string, string>) => {
     const { proformaData, selectedCustomer, products, currency, selectedCompany = 'DASPI', paymentInfo } = data;
@@ -414,7 +552,7 @@ TEL: 0266 3921356`; // Default DASPI adresi
         // PIECE hesaplama - koli sayısı × koli başına adet
         const pcsPerCase = product?.piecesPerCase || 0;
         const totalPieces = pcsPerCase > 0 ? item.quantity * pcsPerCase : 0;
-        
+
         const rowData = [
             item.quantity,
             totalPieces > 0 ? totalPieces : '', // PIECE sütunu

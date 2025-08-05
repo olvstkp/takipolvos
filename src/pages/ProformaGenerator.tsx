@@ -575,13 +575,11 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({ proformaData, customer, custome
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
             <div>
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">Müşteri Seçimi</h3>
-                <select
-                    value={proformaData.customerId}
-                    onChange={(e) => onCustomerChange(e.target.value)}
-                    className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md"
-                >
-                    {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
+                <CustomerSelector
+                    customers={customers}
+                    selectedCustomerId={proformaData.customerId}
+                    onCustomerSelect={onCustomerChange}
+                />
               <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-md border dark:border-gray-600">
                 <p className="font-bold">{customer.name}</p>
                 <p className="whitespace-pre-wrap">{customer.address}</p>
@@ -946,6 +944,163 @@ const SummaryRow: React.FC<{ label: string, value: string | number }> = ({ label
 );
 
 // Product Selector Component with Modal Dialog
+interface CustomerSelectorProps {
+    customers: Customer[];
+    selectedCustomerId: string;
+    onCustomerSelect: (customerId: string) => void;
+}
+
+const CustomerSelector: React.FC<CustomerSelectorProps> = ({ customers, selectedCustomerId, onCustomerSelect }) => {
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [searchTerm, setSearchTerm] = useState('');
+
+    const selectedCustomer = customers.find(c => c.id === selectedCustomerId);
+
+    const filteredCustomers = useMemo(() => {
+        if (!searchTerm) return customers;
+        return customers.filter(customer => 
+            customer.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            customer.address.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            customer.taxId.toLowerCase().includes(searchTerm.toLowerCase())
+        );
+    }, [customers, searchTerm]);
+
+    const handleCustomerSelect = (customer: Customer) => {
+        onCustomerSelect(customer.id);
+        setIsModalOpen(false);
+        setSearchTerm('');
+    };
+
+    const handleClose = () => {
+        setIsModalOpen(false);
+        setSearchTerm('');
+    };
+
+    return (
+        <>
+            {/* Trigger Button */}
+            <button
+                type="button"
+                onClick={() => setIsModalOpen(true)}
+                className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md text-left flex items-center justify-between hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
+            >
+                <span className={selectedCustomer ? 'text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400'}>
+                    {selectedCustomer ? selectedCustomer.name : 'Müşteri Seçiniz...'}
+                </span>
+                <Search className="w-4 h-4 text-gray-400" />
+            </button>
+
+            {/* Modal Dialog */}
+            {isModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50">
+                    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-3xl max-h-[80vh] flex flex-col">
+                        {/* Modal Header */}
+                        <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-600">
+                            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                                Müşteri Seçiniz
+                            </h3>
+                            <button
+                                onClick={handleClose}
+                                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition-colors"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        {/* Search Input */}
+                        <div className="p-6 border-b border-gray-200 dark:border-gray-600">
+                            <div className="relative">
+                                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                                <input
+                                    type="text"
+                                    placeholder="Müşteri adı, adresi veya vergi numarası ile ara..."
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                    className="w-full pl-10 pr-4 py-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                                    autoFocus
+                                />
+                            </div>
+                            {searchTerm && (
+                                <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
+                                    {filteredCustomers.length} müşteri bulundu
+                                </p>
+                            )}
+                        </div>
+
+                        {/* Customers List */}
+                        <div className="flex-1 overflow-y-auto p-6">
+                            {filteredCustomers.length > 0 ? (
+                                <div className="grid grid-cols-1 gap-3">
+                                    {filteredCustomers.map((customer) => (
+                                        <button
+                                            key={customer.id}
+                                            type="button"
+                                            onClick={() => handleCustomerSelect(customer)}
+                                            className={`p-4 rounded-lg border-2 text-left transition-all hover:shadow-md ${
+                                                customer.id === selectedCustomerId 
+                                                    ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 shadow-md' 
+                                                    : 'border-gray-200 dark:border-gray-600 hover:border-blue-300 dark:hover:border-blue-400'
+                                            }`}
+                                        >
+                                            <div className="flex items-start justify-between">
+                                                <div className="flex-1">
+                                                    <h4 className="font-semibold text-gray-900 dark:text-white mb-2">
+                                                        {customer.name}
+                                                    </h4>
+                                                    <div className="text-sm text-gray-600 dark:text-gray-300 mb-2">
+                                                        <p className="whitespace-pre-wrap">{customer.address}</p>
+                                                    </div>
+                                                    <div className="flex flex-wrap items-center gap-4 text-sm text-gray-500 dark:text-gray-400">
+                                                        <span>Vergi No: {customer.taxId}</span>
+                                                        {customer.phone && <span>Tel: {customer.phone}</span>}
+                                                        {customer.delivery && <span>Teslimat: {customer.delivery}</span>}
+                                                    </div>
+                                                </div>
+                                                {customer.id === selectedCustomerId && (
+                                                    <Check className="w-5 h-5 text-blue-500 mt-1" />
+                                                )}
+                                            </div>
+                                        </button>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="flex flex-col items-center justify-center py-12 text-gray-500 dark:text-gray-400">
+                                    <Search className="w-12 h-12 mb-4 opacity-50" />
+                                    <h4 className="text-lg font-medium mb-2">Müşteri bulunamadı</h4>
+                                    <p className="text-sm text-center">
+                                        {searchTerm 
+                                            ? `"${searchTerm}" arama terimi için sonuç bulunamadı`
+                                            : 'Henüz hiç müşteri eklenmemiş'
+                                        }
+                                    </p>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Modal Footer */}
+                        <div className="flex items-center justify-end gap-3 p-6 border-t border-gray-200 dark:border-gray-600">
+                            <button
+                                onClick={handleClose}
+                                className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors"
+                            >
+                                İptal
+                            </button>
+                            {selectedCustomer && (
+                                <button
+                                    onClick={handleClose}
+                                    className="px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-md transition-colors"
+                                >
+                                    Seçili Müşteriyi Kullan
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+        </>
+    );
+};
+
 interface ProductSelectorProps {
     products: Product[];
     selectedProductId: string;
