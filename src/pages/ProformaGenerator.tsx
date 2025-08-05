@@ -146,6 +146,40 @@ const ProformaGenerator: React.FC<ProformaGeneratorProps> = ({ onSuccess }) => {
         toast.loading('Excel dosyası oluşturuluyor...');
 
         try {
+            // Ödeme bilgilerini çek
+            let paymentData = null;
+            try {
+                const savedCompany = localStorage.getItem('selected_company') || 'DASPI';
+                const { data: paymentResult, error: paymentError } = await supabase
+                    .from('company_payment')
+                    .select('*')
+                    .eq('company_name', savedCompany)
+                    .single();
+
+                if (paymentResult && !paymentError) {
+                    paymentData = {
+                        eur: {
+                            bankName: paymentResult.bank_name || '',
+                            branch: paymentResult.branch || '',
+                            branchCode: paymentResult.branch_code || '',
+                            swiftCode: paymentResult.swift_code || '',
+                            accountName: paymentResult.account_name || '',
+                            accountNumber: paymentResult.account_number || ''
+                        },
+                        usd: {
+                            bankName: paymentResult.bank_name_usd || '',
+                            branch: paymentResult.branch_usd || '',
+                            branchCode: paymentResult.branch_code_usd || '',
+                            swiftCode: paymentResult.swift_code_usd || '',
+                            accountName: paymentResult.account_name_usd || '',
+                            accountNumber: paymentResult.account_number_usd || ''
+                        }
+                    };
+                }
+            } catch (error) {
+                console.error('Ödeme bilgileri çekilemedi:', error);
+            }
+
             await generateProformaExcel({
                 proformaData,
                 selectedCustomer,
@@ -153,7 +187,8 @@ const ProformaGenerator: React.FC<ProformaGeneratorProps> = ({ onSuccess }) => {
                 proformaGroups,
                 packingListCalculations,
                 currency,
-                selectedCompany
+                selectedCompany,
+                paymentInfo: paymentData || undefined
             });
 
             toast.dismiss();

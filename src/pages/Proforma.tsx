@@ -338,7 +338,7 @@ const Proforma: React.FC = () => {
         });
 
         try {
-            const detail = await fetchProformaDetail(proformaId);
+        const detail = await fetchProformaDetail(proformaId);
             if (!detail) {
                 toast.error('Proforma bilgileri yüklenemedi!', { id: toastId });
                 return;
@@ -461,6 +461,7 @@ const Proforma: React.FC = () => {
             // Şirket bilgilerini DB'den çek
             const savedCompany = localStorage.getItem('selected_company') || 'DASPI';
             let companyData = { name: savedCompany, address: '', logo_url: null };
+            let paymentData = null;
             
             try {
                 const { data: companyResult, error: companyError } = await supabase
@@ -476,8 +477,36 @@ const Proforma: React.FC = () => {
                         logo_url: companyResult.logo_url
                     };
                 }
+
+                // Ödeme bilgilerini çek
+                const { data: paymentResult, error: paymentError } = await supabase
+                    .from('company_payment')
+                    .select('*')
+                    .eq('company_name', savedCompany)
+                    .single();
+
+                if (paymentResult && !paymentError) {
+                    paymentData = {
+                        eur: {
+                            bankName: paymentResult.bank_name || '',
+                            branch: paymentResult.branch || '',
+                            branchCode: paymentResult.branch_code || '',
+                            swiftCode: paymentResult.swift_code || '',
+                            accountName: paymentResult.account_name || '',
+                            accountNumber: paymentResult.account_number || ''
+                        },
+                        usd: {
+                            bankName: paymentResult.bank_name_usd || '',
+                            branch: paymentResult.branch_usd || '',
+                            branchCode: paymentResult.branch_code_usd || '',
+                            swiftCode: paymentResult.swift_code_usd || '',
+                            accountName: paymentResult.account_name_usd || '',
+                            accountNumber: paymentResult.account_number_usd || ''
+                        }
+                    };
+                }
             } catch (error) {
-                console.error('Şirket bilgileri çekilemedi:', error);
+                console.error('Şirket/ödeme bilgileri çekilemedi:', error);
                 // Fallback olarak localStorage kullan
             }
 
@@ -501,8 +530,9 @@ const Proforma: React.FC = () => {
                 products: transformedProducts,
                 proformaGroups: proformaGroupsData || [],
                 packingListCalculations,
-                currency: 'EUR',
-                selectedCompany: companyData
+                currency: proformaData.currency || 'EUR', // Proforma'dan currency'i al
+                selectedCompany: companyData,
+                paymentInfo: paymentData
             });
 
             toast.success('Excel dosyası başarıyla indirildi!', {
@@ -1673,30 +1703,53 @@ interface ProformaSettingsModalProps {
 }
 
 const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }) => {
+    const [activeTab, setActiveTab] = useState<'logo' | 'payment'>('logo');
+    const [activePaymentTab, setActivePaymentTab] = useState<'eur' | 'usd'>('eur');
     const [logo, setLogo] = useState<File | null>(null);
     const [logoPreview, setLogoPreview] = useState<string | null>(null);
     const [uploading, setUploading] = useState(false);
     const [selectedCompany, setSelectedCompany] = useState<string>('DASPI');
     const [companyAddress, setCompanyAddress] = useState<string>('');
 
-    // Mevcut logoyu yükle
+    // Ödeme bilgileri state'leri - EUR ve USD ayrı
+    const [paymentInfo, setPaymentInfo] = useState(() => ({
+        eur: {
+            bankName: '',
+            branch: '',
+            branchCode: '',
+            swiftCode: '',
+            accountName: '',
+            accountNumber: ''
+        },
+        usd: {
+            bankName: '',
+            branch: '',
+            branchCode: '',
+            swiftCode: '',
+            accountName: '',
+            accountNumber: ''
+        }
+    }));
+    const [savingPayment, setSavingPayment] = useState(false);
+
+    // Mevcut logoyu ve ödeme bilgilerini yükle
     useEffect(() => {
-        const loadLogo = async () => {
+        const loadData = async () => {
             try {
                 // Mevcut şirket seçimini yükle
                 const savedCompany = localStorage.getItem('selected_company') || 'DASPI';
                 setSelectedCompany(savedCompany);
 
                 // Seçili şirketin logo ve adresini çek
-                const { data, error } = await supabase
+                const { data: logoData, error: logoError } = await supabase
                     .from('company_logo')
                     .select('logo_url, address, company_name')
                     .eq('company_name', savedCompany)
                     .single();
 
-                if (data && !error) {
-                    setLogoPreview(data.logo_url);
-                    setCompanyAddress(data.address || '');
+                if (logoData && !logoError) {
+                    setLogoPreview(logoData.logo_url);
+                    setCompanyAddress(logoData.address || '');
                 } else {
                     // Fallback: localStorage'dan yükle
                     const savedLogo = localStorage.getItem('proforma_logo');
@@ -1704,8 +1757,39 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
                         setLogoPreview(savedLogo);
                     }
                 }
+
+                // Ödeme bilgilerini çek
+                const { data: paymentData, error: paymentError } = await supabase
+                    .from('company_payment')
+                    .select('*')
+                    .eq('company_name', savedCompany)
+                    .single();
+
+                if (paymentData && !paymentError) {
+                    console.log('Payment data yüklendi:', paymentData);
+                    const newPaymentInfo = {
+                        eur: {
+                            bankName: paymentData.bank_name || '',
+                            branch: paymentData.branch || '',
+                            branchCode: paymentData.branch_code || '',
+                            swiftCode: paymentData.swift_code || '',
+                            accountName: paymentData.account_name || '',
+                            accountNumber: paymentData.account_number || ''
+                        },
+                        usd: {
+                            bankName: paymentData.bank_name_usd || '',
+                            branch: paymentData.branch_usd || '',
+                            branchCode: paymentData.branch_code_usd || '',
+                            swiftCode: paymentData.swift_code_usd || '',
+                            accountName: paymentData.account_name_usd || '',
+                            accountNumber: paymentData.account_number_usd || ''
+                        }
+                    };
+                    // Force update ile state'i set et
+                    setPaymentInfo(newPaymentInfo);
+                }
             } catch (error) {
-                console.error('Logo yükleme hatası:', error);
+                console.error('Veri yükleme hatası:', error);
                 // Hata durumunda localStorage'dan yükle
                 const savedLogo = localStorage.getItem('proforma_logo');
                 if (savedLogo) {
@@ -1714,24 +1798,75 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
             }
         };
 
-        loadLogo();
-    }, []);
+        loadData();
+    }, [selectedCompany]);
 
     const handleCompanyChange = async (companyName: string) => {
         setSelectedCompany(companyName);
         localStorage.setItem('selected_company', companyName);
 
         try {
-            // Yeni şirketin bilgilerini çek
-            const { data, error } = await supabase
+            // Yeni şirketin logo bilgilerini çek
+            const { data: logoData, error: logoError } = await supabase
                 .from('company_logo')
                 .select('logo_url, address')
                 .eq('company_name', companyName)
                 .single();
 
-            if (data && !error) {
-                setLogoPreview(data.logo_url);
-                setCompanyAddress(data.address || '');
+            if (logoData && !logoError) {
+                setLogoPreview(logoData.logo_url);
+                setCompanyAddress(logoData.address || '');
+            }
+
+            // Yeni şirketin ödeme bilgilerini çek
+            const { data: paymentData, error: paymentError } = await supabase
+                .from('company_payment')
+                .select('*')
+                .eq('company_name', companyName)
+                .single();
+
+            if (paymentData && !paymentError) {
+                console.log('Company change - Payment data:', paymentData);
+                const newPaymentInfo = {
+                    eur: {
+                        bankName: paymentData.bank_name || '',
+                        branch: paymentData.branch || '',
+                        branchCode: paymentData.branch_code || '',
+                        swiftCode: paymentData.swift_code || '',
+                        accountName: paymentData.account_name || '',
+                        accountNumber: paymentData.account_number || ''
+                    },
+                    usd: {
+                        bankName: paymentData.bank_name_usd || '',
+                        branch: paymentData.branch_usd || '',
+                        branchCode: paymentData.branch_code_usd || '',
+                        swiftCode: paymentData.swift_code_usd || '',
+                        accountName: paymentData.account_name_usd || '',
+                        accountNumber: paymentData.account_number_usd || ''
+                    }
+                };
+                console.log('Company change - Set edilecek payment info:', newPaymentInfo);
+                setPaymentInfo(newPaymentInfo);
+            } else {
+                // Eğer ödeme bilgisi yoksa temizle
+                setPaymentInfo({
+                    eur: {
+                        bankName: '',
+                        branch: '',
+                        branchCode: '',
+                        swiftCode: '',
+                        accountName: '',
+                        accountNumber: ''
+                    },
+                    usd: {
+                        bankName: '',
+                        branch: '',
+                        branchCode: '',
+                        swiftCode: '',
+                        accountName: '',
+                        accountNumber: ''
+                    }
+                });
             }
         } catch (error) {
             console.error('Şirket değiştirme hatası:', error);
@@ -1769,62 +1904,62 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
             
             // Eğer yeni logo seçilmişse yükle
             if (logo) {
-                // 1. Storage bucket'ını kontrol et ve oluştur
-                const { data: buckets, error: listError } = await supabase.storage.listBuckets();
+            // 1. Storage bucket'ını kontrol et ve oluştur
+            const { data: buckets, error: listError } = await supabase.storage.listBuckets();
+            
+            if (listError) {
+                console.error('Bucket listesi çekme hatası:', listError);
+            }
+            
+            const companyAssetsBucket = buckets?.find(bucket => bucket.name === 'company-assets');
+            
+            if (!companyAssetsBucket) {
+                // Bucket yoksa oluştur
+                const { error: bucketError } = await supabase.storage.createBucket('company-assets', {
+                    public: true,
+                    allowedMimeTypes: ['image/png', 'image/jpeg', 'image/jpg'],
+                    fileSizeLimit: 5242880 // 5MB
+                });
                 
-                if (listError) {
-                    console.error('Bucket listesi çekme hatası:', listError);
+                if (bucketError) {
+                    console.error('Bucket oluşturma hatası:', bucketError);
+                    // Bucket oluşturamıyorsak yine de devam et, belki zaten var
+                }
+            }
+
+            // 2. Dosya adını belirle
+            const fileExt = logo.name.split('.').pop();
+            const fileName = `company-logo.${fileExt}`;
+            
+            // 3. Mevcut logoyu sil (varsa)
+            await supabase.storage
+                .from('company-assets')
+                .remove([fileName]);
+
+            // 4. Yeni logoyu yükle
+            const { data: uploadData, error: uploadError } = await supabase.storage
+                .from('company-assets')
+                .upload(fileName, logo, {
+                    cacheControl: '3600',
+                    upsert: true
+                });
+
+            if (uploadError) {
+                console.error('Upload hatası detayı:', uploadError);
+                
+                // Eğer bucket hala yok hatası alıyorsak, manuel oluşturmayı dene
+                if (uploadError.message?.includes('Bucket not found')) {
+                    toast.error('Storage bucket bulunamadı. Lütfen Supabase panelinden "company-assets" bucket\'ını oluşturun.');
+                    return;
                 }
                 
-                const companyAssetsBucket = buckets?.find(bucket => bucket.name === 'company-assets');
-                
-                if (!companyAssetsBucket) {
-                    // Bucket yoksa oluştur
-                    const { error: bucketError } = await supabase.storage.createBucket('company-assets', {
-                        public: true,
-                        allowedMimeTypes: ['image/png', 'image/jpeg', 'image/jpg'],
-                        fileSizeLimit: 5242880 // 5MB
-                    });
-                    
-                    if (bucketError) {
-                        console.error('Bucket oluşturma hatası:', bucketError);
-                        // Bucket oluşturamıyorsak yine de devam et, belki zaten var
-                    }
-                }
+                throw uploadError;
+            }
 
-                // 2. Dosya adını belirle
-                const fileExt = logo.name.split('.').pop();
-                const fileName = `company-logo.${fileExt}`;
-                
-                // 3. Mevcut logoyu sil (varsa)
-                await supabase.storage
-                    .from('company-assets')
-                    .remove([fileName]);
-
-                // 4. Yeni logoyu yükle
-                const { data: uploadData, error: uploadError } = await supabase.storage
-                    .from('company-assets')
-                    .upload(fileName, logo, {
-                        cacheControl: '3600',
-                        upsert: true
-                    });
-
-                if (uploadError) {
-                    console.error('Upload hatası detayı:', uploadError);
-                    
-                    // Eğer bucket hala yok hatası alıyorsak, manuel oluşturmayı dene
-                    if (uploadError.message?.includes('Bucket not found')) {
-                        toast.error('Storage bucket bulunamadı. Lütfen Supabase panelinden "company-assets" bucket\'ını oluşturun.');
-                        return;
-                    }
-                    
-                    throw uploadError;
-                }
-
-                // 5. Public URL al
-                const { data: { publicUrl } } = supabase.storage
-                    .from('company-assets')
-                    .getPublicUrl(fileName);
+            // 5. Public URL al
+            const { data: { publicUrl } } = supabase.storage
+                .from('company-assets')
+                .getPublicUrl(fileName);
                     
                 logoUrl = publicUrl;
             }
@@ -1855,46 +1990,46 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
             
             // Storage hatası varsa, fallback olarak base64'ü tabloya kaydet
             if (logo) {
-                try {
-                    console.log('Storage hatası nedeniyle base64 fallback deneniyor...');
+            try {
+                console.log('Storage hatası nedeniyle base64 fallback deneniyor...');
+                
+                // Logo'yu base64'e çevir
+                const reader = new FileReader();
+                reader.onload = async (e) => {
+                    const base64Data = e.target?.result as string;
                     
-                    // Logo'yu base64'e çevir
-                    const reader = new FileReader();
-                    reader.onload = async (e) => {
-                        const base64Data = e.target?.result as string;
-                        
-                        try {
-                            // Tabloyu güncelle (base64 data URL olarak) - Sadece seçili şirketin logo_url'ini güncelle
-                            const { error: insertError } = await supabase
-                                .from('company_logo')
-                                .update({ 
-                                    logo_url: base64Data,
-                                    address: companyAddress
-                                })
-                                .eq('company_name', selectedCompany);
+                    try {
+                        // Tabloyu güncelle (base64 data URL olarak) - Sadece seçili şirketin logo_url'ini güncelle
+                        const { error: insertError } = await supabase
+                            .from('company_logo')
+                            .update({ 
+                                logo_url: base64Data,
+                                address: companyAddress
+                            })
+                            .eq('company_name', selectedCompany);
 
-                            if (insertError) {
-                                throw insertError;
-                            }
-
-                            // Backup için localStorage'a da kaydet
-                            localStorage.setItem('proforma_logo', base64Data);
-                            setLogoPreview(base64Data);
-
-                            toast.success('Logo başarıyla kaydedildi! (Base64 formatında)');
-                            onClose();
-                        } catch (fallbackError: any) {
-                            console.error('Fallback kaydetme hatası:', fallbackError);
-                            toast.error(`Logo kaydedilemedi: ${fallbackError.message}`);
-                        } finally {
-                            setUploading(false);
+                        if (insertError) {
+                            throw insertError;
                         }
-                    };
-                    reader.readAsDataURL(logo);
-                    return; // Ana catch bloğunu bitir
-                } catch (fallbackError) {
-                    console.error('Fallback deneme hatası:', fallbackError);
-                    toast.error(`Logo kaydedilirken hata: ${error.message || error}`);
+
+                        // Backup için localStorage'a da kaydet
+                        localStorage.setItem('proforma_logo', base64Data);
+                        setLogoPreview(base64Data);
+
+                        toast.success('Logo başarıyla kaydedildi! (Base64 formatında)');
+                        onClose();
+                    } catch (fallbackError: any) {
+                        console.error('Fallback kaydetme hatası:', fallbackError);
+                        toast.error(`Logo kaydedilemedi: ${fallbackError.message}`);
+                    } finally {
+                        setUploading(false);
+                    }
+                };
+                reader.readAsDataURL(logo);
+                return; // Ana catch bloğunu bitir
+            } catch (fallbackError) {
+                console.error('Fallback deneme hatası:', fallbackError);
+                toast.error(`Logo kaydedilirken hata: ${error.message || error}`);
                 }
             } else {
                 // Sadece adres güncellemesi yapılıyorsa
@@ -1904,6 +2039,72 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
             if (uploading) {
                 setUploading(false);
             }
+        }
+    };
+
+    const handleSavePayment = async () => {
+        // En az EUR için temel bilgilerin dolu olduğunu kontrol et
+        if (!paymentInfo.eur.bankName || !paymentInfo.eur.swiftCode || !paymentInfo.eur.accountNumber) {
+            toast.error('Lütfen EUR için zorunlu alanları doldurun!');
+            return;
+        }
+
+        setSavingPayment(true);
+        const toastId = toast.loading('Ödeme bilgileri kaydediliyor...');
+
+        try {
+            // Önce mevcut kayıt var mı kontrol et
+            const { data: existingData } = await supabase
+                .from('company_payment')
+                .select('id')
+                .eq('company_name', selectedCompany)
+                .single();
+
+            const paymentData = {
+                company_name: selectedCompany,
+                // EUR bilgileri
+                bank_name: paymentInfo.eur.bankName,
+                branch: paymentInfo.eur.branch,
+                branch_code: paymentInfo.eur.branchCode,
+                swift_code: paymentInfo.eur.swiftCode,
+                account_name: paymentInfo.eur.accountName,
+                account_number: paymentInfo.eur.accountNumber,
+                // USD bilgileri
+                bank_name_usd: paymentInfo.usd.bankName,
+                branch_usd: paymentInfo.usd.branch,
+                branch_code_usd: paymentInfo.usd.branchCode,
+                swift_code_usd: paymentInfo.usd.swiftCode,
+                account_name_usd: paymentInfo.usd.accountName,
+                account_number_usd: paymentInfo.usd.accountNumber
+            };
+
+            console.log('Kaydedilecek ödeme bilgileri:', paymentData);
+            console.log('Aktif tab:', activePaymentTab);
+            console.log('PaymentInfo state:', paymentInfo);
+
+            if (existingData) {
+                // Güncelle
+                const { error } = await supabase
+                    .from('company_payment')
+                    .update(paymentData)
+                    .eq('company_name', selectedCompany);
+
+                if (error) throw error;
+            } else {
+                // Yeni kayıt ekle
+                const { error } = await supabase
+                    .from('company_payment')
+                    .insert([paymentData]);
+
+                if (error) throw error;
+            }
+
+            toast.success('Ödeme bilgileri başarıyla kaydedildi!', { id: toastId });
+        } catch (error: any) {
+            console.error('Ödeme bilgisi kaydetme hatası:', error);
+            toast.error(`Hata: ${error.message}`, { id: toastId });
+        } finally {
+            setSavingPayment(false);
         }
     };
 
@@ -1938,11 +2139,11 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
 
     return (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-md mx-4 shadow-xl">
+            <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-2xl mx-4 shadow-xl max-h-[90vh] overflow-y-auto">
                 <div className="flex items-center justify-between mb-6">
                     <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center">
                         <Settings className="w-5 h-5 mr-2" />
-                        Proforma Ayarları
+                        Şirket Ayarları
                     </h3>
                     <button
                         onClick={onClose}
@@ -1952,9 +2153,32 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
                     </button>
                 </div>
 
-                <div className="space-y-6">
-                    {/* Şirket Seçimi */}
-                    <div>
+                {/* Tab Navigation */}
+                <div className="flex space-x-1 mb-6 bg-gray-100 dark:bg-gray-700 p-1 rounded-lg">
+                    <button
+                        onClick={() => setActiveTab('logo')}
+                        className={`flex-1 px-4 py-2 rounded-md font-medium transition-colors ${
+                            activeTab === 'logo'
+                                ? 'bg-white dark:bg-gray-800 text-blue-600 dark:text-blue-400 shadow'
+                                : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+                        }`}
+                    >
+                        Logo & Adres
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('payment')}
+                        className={`flex-1 px-4 py-2 rounded-md font-medium transition-colors ${
+                            activeTab === 'payment'
+                                ? 'bg-white dark:bg-gray-800 text-blue-600 dark:text-blue-400 shadow'
+                                : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+                        }`}
+                    >
+                        Ödeme Bilgileri
+                    </button>
+                </div>
+
+                {/* Şirket Seçimi - Her iki tab için ortak */}
+                <div className="mb-6">
                         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
                             Şirket Seçimi
                         </label>
@@ -1982,6 +2206,9 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
                         </div>
                     </div>
 
+                {/* Tab Contents */}
+                {activeTab === 'logo' && (
+                    <div className="space-y-6">
                     {/* Şirket Adresi */}
                     <div>
                         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
@@ -2079,6 +2306,178 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
                         </div>
                     </div>
                 </div>
+                )}
+
+                {/* Ödeme Bilgileri Tab */}
+                {activeTab === 'payment' && (
+                    <div className="space-y-6">
+                        {/* Currency Tab Navigation */}
+                        <div className="flex space-x-1 bg-gray-100 dark:bg-gray-700 p-1 rounded-lg">
+                            <button
+                                onClick={() => setActivePaymentTab('eur')}
+                                className={`flex-1 px-4 py-2 rounded-md font-medium transition-colors ${
+                                    activePaymentTab === 'eur'
+                                        ? 'bg-white dark:bg-gray-800 text-green-600 dark:text-green-400 shadow'
+                                        : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+                                }`}
+                            >
+                                💶 EUR Hesabı
+                            </button>
+                            <button
+                                onClick={() => setActivePaymentTab('usd')}
+                                className={`flex-1 px-4 py-2 rounded-md font-medium transition-colors ${
+                                    activePaymentTab === 'usd'
+                                        ? 'bg-white dark:bg-gray-800 text-green-600 dark:text-green-400 shadow'
+                                        : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+                                }`}
+                            >
+                                💵 USD Hesabı
+                            </button>
+                        </div>
+
+                        {/* Active Payment Tab Content */}
+                        <div className="space-y-4">
+                            {/* Banka Bilgileri */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                        Banka Adı * ({activePaymentTab.toUpperCase()})
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={paymentInfo[activePaymentTab]?.bankName || ''}
+                                        onChange={(e) => setPaymentInfo(prev => ({ 
+                                            ...prev, 
+                                            [activePaymentTab]: { ...prev[activePaymentTab], bankName: e.target.value }
+                                        }))}
+                                        className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md"
+                                        placeholder="İŞ BANKASI"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                        Şube
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={paymentInfo[activePaymentTab].branch}
+                                        onChange={(e) => setPaymentInfo(prev => ({ 
+                                            ...prev, 
+                                            [activePaymentTab]: { ...prev[activePaymentTab], branch: e.target.value }
+                                        }))}
+                                        className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md"
+                                        placeholder="EDREMİT / BALIKESİR ŞUBE"
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                        Şube Kodu
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={paymentInfo[activePaymentTab].branchCode}
+                                        onChange={(e) => setPaymentInfo(prev => ({ 
+                                            ...prev, 
+                                            [activePaymentTab]: { ...prev[activePaymentTab], branchCode: e.target.value }
+                                        }))}
+                                        className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md"
+                                        placeholder="ISBTRXXX"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                        SWIFT Kodu *
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={paymentInfo[activePaymentTab].swiftCode}
+                                        onChange={(e) => setPaymentInfo(prev => ({ 
+                                            ...prev, 
+                                            [activePaymentTab]: { ...prev[activePaymentTab], swiftCode: e.target.value }
+                                        }))}
+                                        className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md"
+                                        placeholder="ISBKTRISXXX"
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                        Hesap Sahibi
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={paymentInfo[activePaymentTab].accountName}
+                                        onChange={(e) => setPaymentInfo(prev => ({ 
+                                            ...prev, 
+                                            [activePaymentTab]: { ...prev[activePaymentTab], accountName: e.target.value }
+                                        }))}
+                                        className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md"
+                                        placeholder="OLIVE VE TİCARET"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                        Para Birimi
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={activePaymentTab.toUpperCase()}
+                                        className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-gray-100 dark:bg-gray-600 text-gray-500 dark:text-gray-400 rounded-md"
+                                        disabled
+                                    />
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                    Hesap Numarası *
+                                </label>
+                                <input
+                                    type="text"
+                                    value={paymentInfo[activePaymentTab]?.accountNumber || ''}
+                                    onChange={(e) => setPaymentInfo(prev => ({ 
+                                        ...prev, 
+                                        [activePaymentTab]: { ...prev[activePaymentTab], accountNumber: e.target.value }
+                                    }))}
+                                    className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md"
+                                    placeholder={activePaymentTab === 'eur' ? 'TR 95 0006 4000 0022 1230 7227 02' : 'USD: TR 95 0006 4000 0022 1230 7227 03'}
+                                />
+                            </div>
+                        </div>
+
+                        {/* Kaydet Butonu */}
+                        <div className="flex justify-end">
+                            <button
+                                onClick={handleSavePayment}
+                                disabled={savingPayment}
+                                className="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-lg transition-colors font-medium flex items-center"
+                            >
+                                {savingPayment ? (
+                                    <>
+                                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                                        Kaydediliyor...
+                                    </>
+                                ) : (
+                                    <>
+                                        <Save className="w-4 h-4 mr-2" />
+                                        {activePaymentTab.toUpperCase()} Bilgilerini Kaydet
+                                    </>
+                                )}
+                            </button>
+                        </div>
+
+                        <div className="p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+                            <p className="text-xs text-green-700 dark:text-green-300">
+                                <strong>Bilgi:</strong> Bu ödeme bilgileri Excel dosyalarınızdaki INVOICE sayfasında otomatik olarak görünecektir.
+                            </p>
+                        </div>
+                    </div>
+                )}
 
                 <div className="flex justify-end space-x-3 mt-6">
                     <button

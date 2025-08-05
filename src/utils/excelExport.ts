@@ -13,7 +13,25 @@ export interface ExcelExportData {
     proformaGroups: ProformaGroup[];
     packingListCalculations: any[];
     currency: 'EUR' | 'USD';
-    selectedCompany?: string;
+    selectedCompany?: string | { name: string; address?: string; logo_url?: string };
+    paymentInfo?: {
+        eur?: {
+            bankName: string;
+            branch: string;
+            branchCode: string;
+            swiftCode: string;
+            accountName: string;
+            accountNumber: string;
+        };
+        usd?: {
+            bankName: string;
+            branch: string;
+            branchCode: string;
+            swiftCode: string;
+            accountName: string;
+            accountNumber: string;
+        };
+    };
 }
 
 export const generateProformaExcel = async (data: ExcelExportData) => {
@@ -153,7 +171,7 @@ export const generateProductsExcel = async (data: ProductExportData) => {
 
 // INVOICE SHEET - Resimle birebir aynı
 const createInvoiceSheet = async (workbook: ExcelJS.Workbook, data: ExcelExportData, seriesColorMap: Map<string, string>) => {
-    const { proformaData, selectedCustomer, products, currency, selectedCompany = 'DASPI' } = data;
+    const { proformaData, selectedCustomer, products, currency, selectedCompany = 'DASPI', paymentInfo } = data;
     const invoiceSheet = workbook.addWorksheet('INVOICE');
     
     // Sütun genişlikleri - resimle uyumlu (A-D ana tablo, E-F sağ taraf)
@@ -163,7 +181,7 @@ const createInvoiceSheet = async (workbook: ExcelJS.Workbook, data: ExcelExportD
         { key: 'C', width: 18 }, // UNIT PRICE
         { key: 'D', width: 18 }, // TOTAL AMOUNT
         { key: 'E', width: 17.5 }, // Logo için genişletildi (%250 = 5 * 3.5 = 17.5)
-        { key: 'F', width: 15 }, // INVOICE başlığı için
+        { key: 'F', width: 35 }, // ACCOUNT NUMBER için genişletildi
     ];
 
     // Logo ekle A1 hücresine (Supabase'den çek)
@@ -278,16 +296,19 @@ TEL: 0266 3921356`; // Default DASPI adresi
         addressCell.font = { color: { argb: 'FF808000' }, size: 10 }; // #808000 renk
     });
 
-    // INVOICE başlığı (Sağ üst - resimde gösterildiği gibi)
-    invoiceSheet.mergeCells('E1:F1');
-    const invoiceHeader = invoiceSheet.getCell('E1');
-    invoiceHeader.value = 'INVOICE';
-    invoiceHeader.font = { name: 'Arial', size: 24, bold: true };
+    // PROFORMA INVOICE başlığı (Sağ üst - genişletilmiş alan)
+    invoiceSheet.mergeCells('D1:G1');
+    const invoiceHeader = invoiceSheet.getCell('D1');
+    invoiceHeader.value = 'PROFORMA INVOICE';
+    invoiceHeader.font = { name: 'Arial', size: 26, bold: true };
     invoiceHeader.alignment = { horizontal: 'center', vertical: 'middle' };
+    
+    // Başlık satırının yüksekliğini artır
+    invoiceSheet.getRow(1).height = 35;
 
     // Tarih bilgisi (sağ üst altında)
     invoiceSheet.getCell('E2').value = new Date().toLocaleDateString('en-GB');
-    invoiceSheet.getCell('E3').value = '(CV.22 06.25)';
+    
 
     // Müşteri bilgileri bölümü (Database'den gelen veriler)
     invoiceSheet.getCell('A9').value = 'Ship To:';
@@ -543,14 +564,16 @@ TEL: 0266 3921356`; // Default DASPI adresi
     
     currentRow++;
     
-    // Banka bilgileri değerleri
+    // Banka bilgileri değerleri - para birimine göre dinamik
+    const currentCurrencyPayment = currency === 'USD' ? paymentInfo?.usd : paymentInfo?.eur;
+    
     const bankingValues = [
-        'İŞ BANKASI',
-        'EDREMİT / BALIKESİR ŞUBE',
-        'ISBTRXXX',
-        'ISBKTRISXXX',
-        'OLIVE VE TİCARET',
-        'TR 95 0006 4000 0022 1230 7227 02'
+        currentCurrencyPayment?.bankName || 'İŞ BANKASI',
+        currentCurrencyPayment?.branch || 'EDREMİT / BALIKESİR ŞUBE',
+        currentCurrencyPayment?.branchCode || 'ISBTRXXX',
+        currentCurrencyPayment?.swiftCode || 'ISBKTRISXXX',
+        currentCurrencyPayment?.accountName || 'OLIVE VE TİCARET',
+        currentCurrencyPayment?.accountNumber || (currency === 'USD' ? 'USD: TR 95 0006 4000 0022 1230 7227 03' : 'TR 95 0006 4000 0022 1230 7227 02')
     ];
     
     bankingValues.forEach((value, index) => {
@@ -575,7 +598,7 @@ TEL: 0266 3921356`; // Default DASPI adresi
 
 // ÇALIŞMA Sheet'i - Detaylı Packing List formatı
 const createCalismaSheet = async (workbook: ExcelJS.Workbook, data: ExcelExportData) => {
-    const { proformaData, selectedCustomer, products, currency, selectedCompany = 'DASPI' } = data;
+    const { proformaData, selectedCustomer, products, currency, selectedCompany } = data;
     const calismaSheet = workbook.addWorksheet('ÇALIŞMA');
     
     // Sütun genişlikleri
@@ -599,10 +622,19 @@ const createCalismaSheet = async (workbook: ExcelJS.Workbook, data: ExcelExportD
     // Logo ve şirket bilgileri (INVOICE'takı gibi)
     try {
         const { supabase } = await import('../lib/supabase');
+        
+        // Company name'i doğru şekilde al
+        let companyName = 'DASPI';
+        if (typeof selectedCompany === 'string') {
+            companyName = selectedCompany;
+        } else if (selectedCompany && typeof selectedCompany === 'object' && 'name' in selectedCompany) {
+            companyName = (selectedCompany as any).name;
+        }
+        
         const { data: logoData, error } = await supabase
             .from('company_logo')
             .select('logo_url, address, company_name')
-            .eq('company_name', selectedCompany)
+            .eq('company_name', companyName)
             .single();
 
         if (logoData && !error && logoData.logo_url) {
