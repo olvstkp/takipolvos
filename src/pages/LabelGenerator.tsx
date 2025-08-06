@@ -29,8 +29,8 @@ const LabelGenerator: React.FC = () => {
   const [zplCode, setZplCode] = useState('');
   const [showPreview, setShowPreview] = useState(false);
   const [labelType, setLabelType] = useState<string>('Koli etiketi');
-  const [labelWidth, setLabelWidth] = useState<number>(104);
-  const [labelHeight, setLabelHeight] = useState<number>(50.8);
+  const [labelWidth, setLabelWidth] = useState<number>(100);
+  const [labelHeight, setLabelHeight] = useState<number>(50);
 
   const generateZPL = () => {
     let zpl = '';
@@ -104,14 +104,41 @@ const LabelGenerator: React.FC = () => {
     setShowPreview(true);
   };
 
-  const printLabel = () => {
-    // Zebra yazıcı ile bağlantı simülasyonu
-    if (zplCode) {
-      alert('Etiket yazdırılıyor...\n\nZebra yazıcıya ZPL kodu gönderildi.');
-      // Gerçek implementasyonda burada Zebra yazıcı API'si kullanılacak
-      console.log('ZPL Code:', zplCode);
-    } else {
+  const printLabel = async () => {
+    if (!zplCode) {
       alert('Önce ZPL kodunu oluşturun.');
+      return;
+    }
+
+    try {
+      // ZPL'i clipboard'a kopyala
+      await navigator.clipboard.writeText(zplCode);
+      
+      // Kullanıcıya talimat ver
+      alert(`ZPL kodu clipboard'a kopyalandı!\n\nŞimdi:\n1. Zebra yazıcı yazılımını açın\n2. Ctrl+V ile yapıştırın\n3. Yazdırın`);
+      
+    } catch (error) {
+      console.error('Clipboard hatası:', error);
+      
+      // Fallback: ZPL'i yeni pencerede göster
+      const printWindow = window.open('', '_blank');
+      if (printWindow) {
+        printWindow.document.write(`
+          <html>
+            <head><title>ZPL Kodu</title></head>
+            <body>
+              <h3>ZPL Kodu</h3>
+              <p>Bu kodu Zebra yazıcı yazılımına kopyalayın:</p>
+              <textarea style="width:100%;height:200px;font-family:monospace;">${zplCode}</textarea>
+              <br><br>
+              <button onclick="navigator.clipboard.writeText(document.querySelector('textarea').value)">Kopyala</button>
+            </body>
+          </html>
+        `);
+        printWindow.document.close();
+      }
+      
+      alert('ZPL kodu yeni pencerede açıldı. Kopyalayıp Zebra yazıcı yazılımına yapıştırın.');
     }
   };
 
