@@ -4,6 +4,14 @@
 
 const http = require('http');
 const net = require('net');
+let printerLib = null;
+try {
+  // Native module; requires build tools on Windows
+  printerLib = require('printer');
+} catch (e) {
+  // Optional – USB/local yazdırma için gerekli
+  console.warn('printer modülü yüklenemedi. USB/local yazdırma devre dışı. Hata:', e.message);
+}
 
 const PORT = process.env.ZEBRA_AGENT_PORT ? Number(process.env.ZEBRA_AGENT_PORT) : 18080;
 
@@ -59,6 +67,52 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: e.message }));
     }
+    return;
+  }
+
+  // List local printers (USB/Spooler)
+  if (req.method === 'GET' && req.url === '/printers') {
+    try {
+      if (!printerLib) throw new Error('printer modülü mevcut değil');
+      const printers = printerLib.getPrinters?.() || [];
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ printers }));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
+  // Print via local spooler (RAW ZPL)
+  if (req.method === 'POST' && req.url === '/print-local') {
+    let body = '';
+    req.on('data', chunk => (body += chunk));
+    req.on('end', () => {
+      try {
+        if (!printerLib) throw new Error('printer modülü mevcut değil');
+        const data = JSON.parse(body || '{}');
+        const { zpl, printerName } = data;
+        if (!zpl || !printerName) throw new Error('zpl ve printerName zorunludur');
+        // RAW job
+        printerLib.printDirect({
+          data: zpl,
+          printer: printerName,
+          type: 'RAW',
+          success: () => {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true }));
+          },
+          error: (err) => {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err?.message || String(err) }));
+          }
+        });
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+    });
     return;
   }
 

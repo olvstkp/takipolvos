@@ -38,6 +38,8 @@ const LabelGenerator: React.FC = () => {
   const [zplCode, setZplCode] = useState('');
   const [showPreview, setShowPreview] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [availablePrinters, setAvailablePrinters] = useState<string[]>([]);
+  const [selectedPrinter, setSelectedPrinter] = useState<string>(localStorage.getItem('zebra_printer_name') || '');
 
   // mm -> dots dönüşümü (ZPL koordinatları için)
   const mmToDots = (mm: number) => Math.round((dpi / 25.4) * mm);
@@ -228,14 +230,15 @@ const LabelGenerator: React.FC = () => {
               <head>
                 <title>Etiket Yazdır</title>
                 <style>
-                  body { margin: 0; padding: 20px; }
-                  .label { display: inline-block; border: 1px solid #ccc; }
+                  @page { size: ${labelWidth}mm ${labelHeight}mm; margin: 0; }
+                  html, body { height: 100%; }
+                  body { margin: 0; padding: 0; }
+                  .label { display: inline-block; }
+                  img { width: ${labelWidth}mm; height: ${labelHeight}mm; display: block; }
                 </style>
               </head>
               <body>
-                <div class="label">
-                  <img src="${canvas.toDataURL()}" style="width: ${labelWidth}mm; height: ${labelHeight}mm;" />
-                </div>
+                <img src="${canvas.toDataURL('image/png', 1)}" />
                 <script>
                   window.onload = function() {
                     window.print();
@@ -252,6 +255,36 @@ const LabelGenerator: React.FC = () => {
     } catch (error) {
       console.error('Yazdırma hatası:', error);
       alert('Yazdırma başarısız. Lütfen yazıcı bağlantısını kontrol edin.');
+    }
+  };
+
+  // Web Serial API ile doğrudan (Chrome) – kurulum gerektirmez, kullanıcı izni gerekir
+  const sendViaWebSerial = async () => {
+    if (!('serial' in navigator)) {
+      alert('Tarayıcı Web Serial API desteklemiyor. (Chrome/Edge gereklidir)');
+      return;
+    }
+    if (!zplCode) {
+      alert('Önce ZPL kodunu oluşturun.');
+      return;
+    }
+    try {
+      // Kullanıcıdan port seçmesini iste
+      // Zebra seri modda genellikle 9600/8N1
+      // Gerekirse cihaz ayarına göre baudRate güncellenebilir
+      // @ts-ignore
+      const port = await navigator.serial.requestPort();
+      await port.open({ baudRate: 9600 });
+      const writer = port.writable?.getWriter();
+      if (!writer) throw new Error('Yazıcıya yazma başlatılamadı');
+      const encoder = new TextEncoder();
+      await writer.write(encoder.encode(zplCode));
+      writer.releaseLock();
+      await port.close();
+      alert('Web Serial ile gönderildi.');
+    } catch (e: any) {
+      console.error('Web Serial hatası:', e);
+      alert(`Web Serial başarısız: ${e?.message || e}`);
     }
   };
 
@@ -279,6 +312,52 @@ const LabelGenerator: React.FC = () => {
       alert(`Gönderim başarısız: ${err.message}. Lütfen yerel yazıcı ajanının çalıştığından emin olun.`);
     }
   };
+
+  // USB/Spooler üzerinden yazdır (yerel ajan /print-local)
+  const sendToLocalPrinter = async () => {
+    if (!zplCode) {
+      alert('Önce ZPL kodunu oluşturun.');
+      return;
+    }
+    if (!selectedPrinter) {
+      alert('Önce bir yazıcı seçin.');
+      return;
+    }
+    try {
+      localStorage.setItem('zebra_printer_name', selectedPrinter);
+      const res = await fetch(`http://localhost:${agentPort}/print-local`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ zpl: zplCode, printerName: selectedPrinter })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Yazdırma hatası');
+      alert('Yerel yazıcıya gönderildi.');
+    } catch (err: any) {
+      console.error('Yerel yazdırma hatası:', err);
+      alert(`Yerel yazdırma başarısız: ${err.message}. Ajanın çalıştığını ve yazıcı adının doğru olduğunu kontrol edin.`);
+    }
+  };
+
+  // Ajan üzerinden yazıcı listesini çek
+  const fetchPrinters = async () => {
+    try {
+      const res = await fetch(`http://localhost:${agentPort}/printers`);
+      const data = await res.json();
+      if (res.ok) {
+        const names = (data?.printers || []).map((p: any) => p?.name || p);
+        setAvailablePrinters(names);
+        if (!selectedPrinter && names.length > 0) setSelectedPrinter(names[0]);
+      }
+    } catch (e) {
+      // ajan kapalı olabilir – sessiz geç
+    }
+  };
+
+  useEffect(() => {
+    fetchPrinters();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentPort]);
 
   const downloadZPL = () => {
     if (zplCode) {
@@ -509,6 +588,31 @@ const LabelGenerator: React.FC = () => {
                 />
               </div>
             </div>
+            {/* USB/Spooler Yazıcı Seçimi */}
+            <div className="grid grid-cols-2 gap-4 mt-4">
+              <div className="col-span-2">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Yerel Yazıcı (USB/Spooler)</label>
+                <div className="flex gap-2">
+                  <select
+                    value={selectedPrinter}
+                    onChange={(e) => setSelectedPrinter(e.target.value)}
+                    className="flex-1 p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  >
+                    <option value="">— Yazıcı seçin —</option>
+                    {availablePrinters.map((p) => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={fetchPrinters}
+                    className="px-3 py-2 bg-gray-200 rounded-md hover:bg-gray-300"
+                  >
+                    Yenile
+                  </button>
+                </div>
+              </div>
+            </div>
             </div>
           </div>
 
@@ -549,6 +653,22 @@ const LabelGenerator: React.FC = () => {
             >
               <Printer className="w-4 h-4 mr-2" />
               Zebra'ya Gönder (Yerel Ajan)
+            </button>
+            <button
+              onClick={sendToLocalPrinter}
+              disabled={!zplCode}
+              className="flex items-center justify-center px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 disabled:bg-purple-300 disabled:cursor-not-allowed"
+            >
+              <Printer className="w-4 h-4 mr-2" />
+              USB/Spooler ile Yazdır (Ajan)
+            </button>
+            <button
+              onClick={sendViaWebSerial}
+              disabled={!zplCode}
+              className="flex items-center justify-center px-4 py-2 bg-teal-600 text-white rounded-md hover:bg-teal-700 disabled:bg-teal-300 disabled:cursor-not-allowed"
+            >
+              <Printer className="w-4 h-4 mr-2" />
+              Web Serial ile Gönder (Kurulumsuz)
             </button>
             </div>
           </div>
