@@ -42,7 +42,7 @@ const LabelGenerator: React.FC = () => {
   // mm -> dots dönüşümü (ZPL koordinatları için)
   const mmToDots = (mm: number) => Math.round((dpi / 25.4) * mm);
 
-  // ZPL'i görsel olarak render et
+  // ZPL'i görsel olarak render et (raster baskı için canvas, DPI'ya göre gerçek boyut)
   const renderZPLPreview = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -50,10 +50,13 @@ const LabelGenerator: React.FC = () => {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Canvas boyutunu ayarla (1mm = 3.78 pixel)
-    const scale = 3.78;
-    canvas.width = labelWidth * scale;
-    canvas.height = labelHeight * scale;
+    // Gerçek DPI'a göre piksel/mm
+    const pxPerMm = dpi / 25.4; // 203dpi ≈ 7.99 px/mm
+    const mmToPx = (mm: number) => Math.round(mm * pxPerMm);
+
+    // Canvas boyutunu ayarla (piksel)
+    canvas.width = Math.max(1, Math.round(labelWidth * pxPerMm));
+    canvas.height = Math.max(1, Math.round(labelHeight * pxPerMm));
 
     // Arka planı temizle
     ctx.fillStyle = 'white';
@@ -85,19 +88,19 @@ const LabelGenerator: React.FC = () => {
     switch (labelType) {
       case 'Koli etiketi':
         // Başlık
-        ctx.font = 'bold 22px Arial';
-        ctx.fillText('OLIVOS', 6 * scale, 8 * scale);
+        ctx.font = `bold ${mmToPx(5)}px Arial`;
+        ctx.fillText('OLIVOS', mmToPx(6), mmToPx(6));
 
         // Ürün adı (sararak)
-        ctx.font = '16px Arial';
-        let y = 16 * scale;
-        const left = 6 * scale;
-        const maxW = (labelWidth - 12) * scale;
-        y = wrapText(labelData.productName, left, y, maxW, 6 * scale);
+        ctx.font = `${mmToPx(4)}px Arial`;
+        let y = mmToPx(13);
+        const left = mmToPx(6);
+        const maxW = mmToPx(labelWidth - 12);
+        y = wrapText(labelData.productName, left, y, maxW, mmToPx(5));
 
         // Diğer alanlar (daha küçük yazı)
-        ctx.font = '13px Arial';
-        const addLine = (text: string) => { ctx.fillText(text, left, y); y += 5 * scale; };
+        ctx.font = `${mmToPx(3.2)}px Arial`;
+        const addLine = (text: string) => { ctx.fillText(text, left, y); y += mmToPx(4.2); };
         if (labelData.amount) addLine(`Miktar: ${labelData.amount}`);
         if (labelData.serialNumber) addLine(`Seri: ${labelData.serialNumber}`);
         if (labelData.batchNumber) addLine(`Parti: ${labelData.batchNumber}`);
@@ -107,52 +110,58 @@ const LabelGenerator: React.FC = () => {
         if (labelData.supplier) addLine(`Tedarikçi: ${labelData.supplier}`);
 
         // Alt kısımda barkod simülasyonu (kırpılmaması için kontrol)
-        const barY = Math.min((labelHeight - 10) * scale, y + 4 * scale);
+        const barY = Math.min(mmToPx(labelHeight - 10), y + mmToPx(3));
         ctx.fillStyle = '#333';
-        ctx.fillRect(left, barY, 60 * scale, 10 * scale);
+        ctx.fillRect(left, barY, mmToPx(60), mmToPx(8));
         ctx.fillStyle = 'white';
-        ctx.font = '10px Arial';
-        ctx.fillText('8681917311582', left + 2 * scale, barY + 1 * scale);
+        ctx.font = `${mmToPx(2.5)}px Arial`;
+        ctx.fillText('8681917311582', left + mmToPx(2), barY + mmToPx(1));
         break;
         
       case 'Numune Etiketi':
-        ctx.font = 'bold 20px Arial';
-        ctx.fillText('NUMUNE', 20 * scale, 10 * scale);
-        
-        ctx.font = '18px Arial';
-        ctx.fillText(labelData.productName, 20 * scale, 30 * scale);
-        
-        ctx.font = '15px Arial';
-        ctx.fillText(`Seri No: ${labelData.serialNumber}`, 20 * scale, 48 * scale);
-        ctx.fillText(`Giriş: ${labelData.entryDate}`, 20 * scale, 66 * scale);
-        ctx.fillText(`SKT: ${labelData.expiryDate}`, 20 * scale, 84 * scale);
-        ctx.fillText(`Miktar: ${labelData.amount}`, 20 * scale, 102 * scale);
-        ctx.fillText(`Parti: ${labelData.batchNumber}`, 20 * scale, 120 * scale);
-        ctx.fillText(`Tedarikçi: ${labelData.supplier}`, 20 * scale, 138 * scale);
-        
+        ctx.font = `bold ${mmToPx(5)}px Arial`;
+        ctx.fillText('NUMUNE', mmToPx(6), mmToPx(6));
+
+        ctx.font = `${mmToPx(4)}px Arial`;
+        wrapText(labelData.productName, mmToPx(6), mmToPx(13), mmToPx(labelWidth - 12), mmToPx(5));
+
+        ctx.font = `${mmToPx(3.2)}px Arial`;
+        let yN = mmToPx(23);
+        const leftN = mmToPx(6);
+        const addLineN = (t: string) => { ctx.fillText(t, leftN, yN); yN += mmToPx(4.2); };
+        if (labelData.serialNumber) addLineN(`Seri No: ${labelData.serialNumber}`);
+        if (labelData.entryDate) addLineN(`Giriş: ${labelData.entryDate}`);
+        if (labelData.expiryDate) addLineN(`SKT: ${labelData.expiryDate}`);
+        if (labelData.amount) addLineN(`Miktar: ${labelData.amount}`);
+        if (labelData.batchNumber) addLineN(`Parti: ${labelData.batchNumber}`);
+        if (labelData.supplier) addLineN(`Tedarikçi: ${labelData.supplier}`);
+
         // QR kod simülasyonu
         ctx.fillStyle = '#333';
-        ctx.fillRect(20 * scale, 156 * scale, 40 * scale, 40 * scale);
+        ctx.fillRect(mmToPx(6), mmToPx(labelHeight - 18), mmToPx(16), mmToPx(16));
         break;
         
       case 'Yarı Mamül Etiketi':
-        ctx.font = 'bold 20px Arial';
-        ctx.fillText('YARI MAMÜL', 20 * scale, 10 * scale);
-        
-        ctx.font = '18px Arial';
-        ctx.fillText(labelData.productName, 20 * scale, 30 * scale);
-        
-        ctx.font = '15px Arial';
-        ctx.fillText(`Seri No: ${labelData.serialNumber}`, 20 * scale, 48 * scale);
-        ctx.fillText(`Giriş: ${labelData.entryDate}`, 20 * scale, 66 * scale);
-        ctx.fillText(`SKT: ${labelData.expiryDate}`, 20 * scale, 84 * scale);
-        ctx.fillText(`Miktar: ${labelData.amount}`, 20 * scale, 102 * scale);
-        ctx.fillText(`Parti: ${labelData.batchNumber}`, 20 * scale, 120 * scale);
-        ctx.fillText(`Tedarikçi: ${labelData.supplier}`, 20 * scale, 138 * scale);
-        
+        ctx.font = `bold ${mmToPx(5)}px Arial`;
+        ctx.fillText('YARI MAMÜL', mmToPx(6), mmToPx(6));
+
+        ctx.font = `${mmToPx(4)}px Arial`;
+        wrapText(labelData.productName, mmToPx(6), mmToPx(13), mmToPx(labelWidth - 12), mmToPx(5));
+
+        ctx.font = `${mmToPx(3.2)}px Arial`;
+        let yY = mmToPx(23);
+        const leftY = mmToPx(6);
+        const addLineY = (t: string) => { ctx.fillText(t, leftY, yY); yY += mmToPx(4.2); };
+        if (labelData.serialNumber) addLineY(`Seri No: ${labelData.serialNumber}`);
+        if (labelData.entryDate) addLineY(`Giriş: ${labelData.entryDate}`);
+        if (labelData.expiryDate) addLineY(`SKT: ${labelData.expiryDate}`);
+        if (labelData.amount) addLineY(`Miktar: ${labelData.amount}`);
+        if (labelData.batchNumber) addLineY(`Parti: ${labelData.batchNumber}`);
+        if (labelData.supplier) addLineY(`Tedarikçi: ${labelData.supplier}`);
+
         // QR kod simülasyonu
         ctx.fillStyle = '#333';
-        ctx.fillRect(20 * scale, 156 * scale, 40 * scale, 40 * scale);
+        ctx.fillRect(mmToPx(6), mmToPx(labelHeight - 18), mmToPx(16), mmToPx(16));
         break;
     }
     // Koyuluk uygulaması (siyahları güçlendirme)
@@ -274,9 +283,14 @@ const LabelGenerator: React.FC = () => {
                 <style>
                   @page { size: ${labelWidth}mm ${labelHeight}mm; margin: 0; }
                   html, body { height: 100%; }
-                  body { margin: 0; padding: 0; }
+                  body { margin: 0; padding: 0; background: white; }
                   .label { display: inline-block; }
-                  img { width: ${labelWidth}mm; height: ${labelHeight}mm; display: block; }
+                  img {
+                    width: ${labelWidth}mm;
+                    height: ${labelHeight}mm;
+                    display: block;
+                    image-rendering: pixelated; /* Zebra raster için keskinlik */
+                  }
                 </style>
               </head>
               <body>
