@@ -129,6 +129,119 @@ const LabelGenerator: React.FC = () => {
   useEffect(() => { try { localStorage.setItem('label_styles_v1', JSON.stringify(styles)); } catch {} }, [styles]);
   // not used yet – future inline selection
 
+  // Taslak yönetimi
+  type TemplateRow = { id: string; name: string; data: any; thumbnail?: string };
+  const [templates, setTemplates] = useState<TemplateRow[]>([]);
+  const [templateName, setTemplateName] = useState<string>('Yeni Taslak');
+  const [saving, setSaving] = useState<boolean>(false);
+  // const [loadingTemplates, setLoadingTemplates] = useState<boolean>(false);
+  const [showTemplateModal, setShowTemplateModal] = useState<boolean>(false);
+  const [templateSearch, setTemplateSearch] = useState<string>('');
+  const [currentTemplateId, setCurrentTemplateId] = useState<string | null>(null);
+  const [baselineState, setBaselineState] = useState<any | null>(null);
+  const [isDirty, setIsDirty] = useState<boolean>(false);
+  const [showSaveDialog, setShowSaveDialog] = useState<boolean>(false);
+
+  const serializeState = () => ({
+    labelData,
+    labelType,
+    labelWidth,
+    labelHeight,
+    dpi,
+    darkness,
+    zplDarkness,
+    anchors,
+    styles,
+    selectedCompany,
+  });
+
+  const applySerializedState = (s: any) => {
+    if (!s) return;
+    setLabelData(s.labelData ?? labelData);
+    setLabelType(s.labelType ?? labelType);
+    setLabelWidth(s.labelWidth ?? labelWidth);
+    setLabelHeight(s.labelHeight ?? labelHeight);
+    setDpi(s.dpi ?? dpi);
+    setDarkness(s.darkness ?? darkness);
+    setZplDarkness(s.zplDarkness ?? zplDarkness);
+    setAnchors(s.anchors ?? anchors);
+    setStyles(s.styles ?? styles);
+    if (s.selectedCompany) setSelectedCompany(s.selectedCompany);
+  };
+
+  const fetchTemplates = async () => {
+    // setLoadingTemplates(true);
+    const { data, error } = await supabase
+      .from('label_templates')
+      .select('id, name, data, thumbnail')
+      .order('created_at', { ascending: false });
+    if (!error && data) setTemplates(data as TemplateRow[]);
+    // setLoadingTemplates(false);
+  };
+
+  useEffect(() => { fetchTemplates(); }, []);
+
+  const generateThumbnail = (): string | undefined => {
+    const canvas = canvasRef.current;
+    if (!canvas) return undefined;
+    try { return canvas.toDataURL('image/png', 0.6); } catch { return undefined; }
+  };
+
+  const saveTemplate = async () => {
+    setSaving(true);
+    const payload = { name: templateName || 'Yeni Taslak', data: serializeState(), thumbnail: generateThumbnail() };
+    const { error } = await supabase.from('label_templates').insert(payload);
+    setSaving(false);
+    if (!error) {
+      setBaselineState(serializeState());
+      setIsDirty(false);
+      setCurrentTemplateId(null);
+      fetchTemplates();
+    }
+  };
+
+  const updateTemplate = async (id: string) => {
+    setSaving(true);
+    const payload = { name: templateName || 'Taslak', data: serializeState(), thumbnail: generateThumbnail(), updated_at: new Date().toISOString() };
+    const { error } = await supabase.from('label_templates').update(payload).eq('id', id);
+    setSaving(false);
+    if (!error) {
+      setBaselineState(serializeState());
+      setIsDirty(false);
+      fetchTemplates();
+    }
+  };
+
+  const loadTemplate = async (id: string) => {
+    const row = templates.find(t => t.id === id);
+    if (!row) return;
+    applySerializedState(row.data);
+    setTemplateName(row.name);
+    setCurrentTemplateId(row.id);
+    setBaselineState(row.data);
+    setIsDirty(false);
+    setShowPreview(true);
+    // ZPL ve önizlemeyi hemen oluştur
+    setTimeout(() => {
+      try { generateZPL(); } catch {}
+    }, 0);
+  };
+
+  // İlk baseline
+  useEffect(() => {
+    if (!baselineState) setBaselineState(serializeState());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Değişiklik izleme
+  useEffect(() => {
+    if (!baselineState) return;
+    const now = JSON.stringify(serializeState());
+    const base = JSON.stringify(baselineState);
+    setIsDirty(now !== base);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [labelData, labelType, labelWidth, labelHeight, dpi, darkness, zplDarkness, anchors, styles, selectedCompany]);
+
   // ZPL'i görsel olarak render et (raster baskı için canvas, DPI'ya göre gerçek boyut)
   const renderZPLPreview = () => {
     const canvas = canvasRef.current;
@@ -306,7 +419,7 @@ const LabelGenerator: React.FC = () => {
         if (labelData.amount) addLineN(`Miktar: ${labelData.amount}`);
         if (labelData.batchNumber) addLineN(`Parti: ${labelData.batchNumber}`);
         if (labelData.supplier) addLineN(`Tedarikçi: ${labelData.supplier}`);
-
+        
         // QR kod simülasyonu
         ctx.fillStyle = '#333';
         ctx.fillRect(mmToPx(6), mmToPx(labelHeight - 18), mmToPx(16), mmToPx(16));
@@ -329,7 +442,7 @@ const LabelGenerator: React.FC = () => {
         if (labelData.amount) addLineY(`Miktar: ${labelData.amount}`);
         if (labelData.batchNumber) addLineY(`Parti: ${labelData.batchNumber}`);
         if (labelData.supplier) addLineY(`Tedarikçi: ${labelData.supplier}`);
-
+        
         // QR kod simülasyonu
         ctx.fillStyle = '#333';
         ctx.fillRect(mmToPx(6), mmToPx(labelHeight - 18), mmToPx(16), mmToPx(16));
@@ -513,7 +626,30 @@ const LabelGenerator: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Form */}
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-6">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Etiket Bilgileri</h3>
+          <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Etiket Bilgileri</h3>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={templateName}
+                onChange={(e)=>setTemplateName(e.target.value)}
+                placeholder="Taslak adı"
+                className="w-44 p-2 text-sm border border-gray-300 rounded"
+              />
+              <button onClick={()=>setShowSaveDialog(true)} disabled={saving || !isDirty && !currentTemplateId} className={`px-3 py-1.5 text-sm text-white rounded ${currentTemplateId ? 'bg-emerald-600' : 'bg-indigo-600'} disabled:opacity-50`}>{currentTemplateId ? 'Güncelle' : 'Kaydet'}</button>
+              <button
+                type="button"
+                className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded"
+                onClick={() => {
+                  // mevcut durumdan yeni şablon oluştur
+                  setCurrentTemplateId(null);
+                  setTemplateName((n)=> (n ? `${n} (Kopya)` : 'Yeni Taslak'));
+                  setShowSaveDialog(true);
+                }}
+              >Yeni Kaydet</button>
+              <button type="button" onClick={()=>setShowTemplateModal(true)} className="px-3 py-1.5 text-sm bg-gray-700 text-white rounded">Şablonlar</button>
+            </div>
+          </div>
 
           {/* Etiket Türü Seçimi */}
           <div className="mb-4">
@@ -777,8 +913,8 @@ const LabelGenerator: React.FC = () => {
           </div>
 
                      {/* Butonlar önizleme bölümüne taşındı */}
+            </div>
           </div>
-        </div>
 
         {/* Preview */}
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow p-5 border border-gray-100 dark:border-gray-700">
@@ -787,14 +923,14 @@ const LabelGenerator: React.FC = () => {
             
             {/* Action Buttons */}
             <div className="flex gap-2">
-              <button
-                onClick={generateZPL}
+            <button
+              onClick={generateZPL}
                 className="flex items-center justify-center px-3 py-1.5 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700"
-              >
+            >
                 <QrCode className="w-4 h-4 mr-1" />
                 ZPL Oluştur
-              </button>
-              
+            </button>
+            
               <button
                 onClick={downloadZPL}
                 disabled={!zplCode}
@@ -812,22 +948,22 @@ const LabelGenerator: React.FC = () => {
                 <Printer className="w-4 h-4 mr-1" />
                 Yazdır
               </button>
-            </div>
           </div>
-          
+        </div>
+
         {/* Canvas Preview + Drag Anchors */}
-        {showPreview && (
-          <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-4 mb-4">
+          {showPreview && (
+            <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-4 mb-4">
             <div className="w-full max-w-md mx-auto bg-white dark:bg-gray-800 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-md p-4 relative">
-              <canvas
-                ref={canvasRef}
-                className="w-full h-auto border border-gray-300"
-                style={{ 
+                <canvas
+                  ref={canvasRef}
+                  className="w-full h-auto border border-gray-300"
+                  style={{ 
                   width: `${labelWidth * 3.78 * zoom}px`, 
                   height: `${labelHeight * 3.78 * zoom}px`,
-                  maxWidth: '100%'
-                }}
-              />
+                    maxWidth: '100%'
+                  }}
+                />
               {editMode && (
                 <div ref={overlayRef} className="absolute inset-4 pointer-events-none select-none">
                   {(['title','productName','details','barcode'] as const).map((key) => (
@@ -938,9 +1074,9 @@ const LabelGenerator: React.FC = () => {
                 className="text-xs px-2 py-1 bg-gray-200 rounded hover:bg-gray-300"
                 onClick={() => setAnchors(defaultAnchors)}
               >Konumları Sıfırla</button>
+              </div>
             </div>
-          </div>
-        )}
+          )}
 
           {/* ZPL Code Display */}
           {zplCode && (
@@ -956,6 +1092,60 @@ const LabelGenerator: React.FC = () => {
 
           {/* Talimatlar kaldırıldı – arayüzü sadeleştirmek için */}
         </div>
+
+        {/* Şablon Modalı */}
+        {showTemplateModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/40" onClick={()=>setShowTemplateModal(false)} />
+            <div className="relative bg-white dark:bg-gray-800 w-full max-w-3xl rounded-lg shadow-lg p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-lg font-semibold">Şablonlar</h4>
+                <button className="text-sm px-2 py-1 rounded bg-gray-200 dark:bg-gray-700" onClick={()=>setShowTemplateModal(false)}>Kapat</button>
+              </div>
+              <div className="mb-3 flex items-center gap-2">
+                <input value={templateSearch} onChange={(e)=>setTemplateSearch(e.target.value)} placeholder="Ara..." className="flex-1 p-2 border rounded" />
+                <button onClick={fetchTemplates} className="px-3 py-1.5 text-sm bg-gray-700 text-white rounded">Yenile</button>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3 max-h-[60vh] overflow-auto">
+                {templates.filter(t=> t.name.toLowerCase().includes(templateSearch.toLowerCase())).map(t => (
+                  <div key={t.id} className="border rounded-md p-2 hover:shadow cursor-pointer" onClick={()=>{loadTemplate(t.id); setShowTemplateModal(false);}}>
+                    {t.thumbnail ? (
+                      <img src={t.thumbnail} alt={t.name} className="w-full h-28 object-contain bg-gray-50 rounded" />
+                    ) : (
+                      <div className="w-full h-28 bg-gray-100 rounded flex items-center justify-center text-xs text-gray-500">Önizleme yok</div>
+                    )}
+                    <div className="mt-2 text-sm font-medium truncate" title={t.name}>{t.name}</div>
+                  </div>
+                ))}
+                {templates.length===0 && (
+                  <div className="col-span-full text-sm text-gray-500">Kayıtlı şablon yok.</div>
+                )}
+          </div>
+        </div>
+          </div>
+        )}
+
+        {/* Kaydet/Güncelle Onayı */}
+        {showSaveDialog && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/40" onClick={()=>setShowSaveDialog(false)} />
+            <div className="relative bg-white dark:bg-gray-800 w-full max-w-md rounded-lg shadow-lg p-4">
+              <h4 className="text-lg font-semibold mb-2">{currentTemplateId ? 'Şablonu güncelle' : 'Yeni şablon kaydet'}</h4>
+              <p className="text-sm text-gray-600 dark:text-gray-300 mb-3">Bu şablonu {currentTemplateId ? 'güncellemek' : 'kaydetmek'} istiyor musunuz?</p>
+              <div className="border rounded mb-3 bg-gray-50 flex items-center justify-center">
+                <img src={generateThumbnail()} alt="Önizleme" className="max-h-48 object-contain mx-auto" />
+              </div>
+              <div className="flex items-center justify-end gap-2">
+                <button className="px-3 py-1.5 text-sm rounded bg-gray-200 dark:bg-gray-700" onClick={()=>setShowSaveDialog(false)}>Vazgeç</button>
+                {currentTemplateId ? (
+                  <button className="px-3 py-1.5 text-sm rounded bg-emerald-600 text-white" onClick={()=>{updateTemplate(currentTemplateId); setShowSaveDialog(false);}}>Güncelle</button>
+                ) : (
+                  <button className="px-3 py-1.5 text-sm rounded bg-indigo-600 text-white" onClick={()=>{saveTemplate(); setShowSaveDialog(false);}}>Kaydet</button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
