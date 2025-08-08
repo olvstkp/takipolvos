@@ -36,6 +36,7 @@ const LabelGenerator: React.FC = () => {
   const [dpi, setDpi] = useState<203 | 300 | 600>(203);
   const [darkness, setDarkness] = useState<number>(1);
   const [zplDarkness, setZplDarkness] = useState<number>(15); // ^MD 0-30
+  const [showAdvancedSettings, setShowAdvancedSettings] = useState<boolean>(false);
   const [zoom, setZoom] = useState<number>(() => {
     const saved = Number(localStorage.getItem('label_zoom') || '1');
     return isNaN(saved) ? 1 : Math.min(3, Math.max(0.5, saved));
@@ -599,9 +600,26 @@ const LabelGenerator: React.FC = () => {
               </div>
             </div>
 
-            {/* Etiket Boyutu Ayarları */}
+            {/* Gelişmiş Ayarlar Toggle */}
             <div className="border-t pt-4">
-              <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Etiket Boyutu Ayarları</h4>
+              <button
+                onClick={() => setShowAdvancedSettings(!showAdvancedSettings)}
+                className="flex items-center gap-2 text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white font-medium mb-3"
+              >
+                <svg
+                  className={`w-4 h-4 transition-transform ${showAdvancedSettings ? 'rotate-90' : ''}`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+                Gelişmiş Ayarları Göster
+              </button>
+              
+              {/* Etiket Boyutu Ayarları - Collapsible */}
+              {showAdvancedSettings && (
+                <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4">
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Genişlik (mm)</label>
@@ -700,45 +718,48 @@ const LabelGenerator: React.FC = () => {
                 <input type="number" step={0.1} min={20} value={styles.barcode.widthMm} onChange={(e)=>setStyles({...styles, barcode:{...styles.barcode, widthMm:Number(e.target.value)}})} className="w-full p-2 border border-gray-300 rounded" />
               </div>
             </div>
-            </div>
+                </div>
+              )}
           </div>
 
-          <div className="mt-6 space-y-3">
-            <button
-              onClick={generateZPL}
-              className="w-full flex items-center justify-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
-            >
-              <QrCode className="w-4 h-4 mr-2" />
-              ZPL Kodunu Oluştur
-            </button>
+                     {/* Butonlar önizleme bölümüne taşındı */}
+          </div>
+        </div>
+
+        {/* Preview */}
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow p-5 border border-gray-100 dark:border-gray-700">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Etiket Önizleme</h3>
             
-            <div className="grid grid-cols-2 gap-3">
+            {/* Action Buttons */}
+            <div className="flex gap-2">
+              <button
+                onClick={generateZPL}
+                className="flex items-center justify-center px-3 py-1.5 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700"
+              >
+                <QrCode className="w-4 h-4 mr-1" />
+                ZPL Oluştur
+              </button>
+              
               <button
                 onClick={downloadZPL}
                 disabled={!zplCode}
-                className="flex items-center justify-center px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                className="flex items-center justify-center px-3 py-1.5 bg-gray-600 text-white text-sm rounded-md hover:bg-gray-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
               >
-                <Download className="w-4 h-4 mr-2" />
+                <Download className="w-4 h-4 mr-1" />
                 ZPL İndir
               </button>
               
               <button
                 onClick={printLabel}
                 disabled={!zplCode}
-                className="flex items-center justify-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:bg-green-300 disabled:cursor-not-allowed"
+                className="flex items-center justify-center px-3 py-1.5 bg-green-600 text-white text-sm rounded-md hover:bg-green-700 disabled:bg-green-300 disabled:cursor-not-allowed"
               >
-                <Printer className="w-4 h-4 mr-2" />
+                <Printer className="w-4 h-4 mr-1" />
                 Yazdır
               </button>
+            </div>
           </div>
-
-          {/* Diğer yazdırma yöntemleri kaldırıldı */}
-          </div>
-        </div>
-
-        {/* Preview */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-6">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Etiket Önizleme</h3>
           
         {/* Canvas Preview + Drag Anchors */}
         {showPreview && (
@@ -879,19 +900,7 @@ const LabelGenerator: React.FC = () => {
             </div>
           )}
 
-          {/* Instructions */}
-          <div className="mt-6 bg-blue-50 dark:bg-blue-900/20 rounded-md p-4">
-            <h4 className="font-medium text-blue-900 dark:text-blue-200 mb-2">Yazdırma Talimatları:</h4>
-            <ul className="text-sm text-blue-800 dark:text-blue-200 space-y-1">
-              <li>• Zebra yazıcının IP adresi ve port numarası ayarlanmalı</li>
-              <li>• Etiket boyutu: {labelWidth}mm x {labelHeight}mm</li>
-              <li>• Isı transfer veya direct termal ribbon kullanın</li>
-              <li>• Yazdırma hızı: 4 ips (inches per second)</li>
-              <li>• Yazdırma kalitesi: 8 dpmm (dots per millimeter)</li>
-              <li>• Koli etiketi: Barkod formatı Code 128</li>
-              <li>• Numune/Yarı Mamül: QR kod formatı</li>
-            </ul>
-          </div>
+          {/* Talimatlar kaldırıldı – arayüzü sadeleştirmek için */}
         </div>
       </div>
     </div>
