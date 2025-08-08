@@ -11,6 +11,7 @@ interface LabelData {
   batchNumber: string;
   supplier: string;
   logo: string;
+  barcode?: string; // EAN-13
 }
 
 const LabelGenerator: React.FC = () => {
@@ -23,7 +24,8 @@ const LabelGenerator: React.FC = () => {
     invoiceNumber: 'INV-2024-001',
     batchNumber: 'BATCH-20241228',
     supplier: 'Akdeniz Gıda Ltd. Şti.',
-    logo: ''
+    logo: '',
+    barcode: '5901234123457'
   });
 
   const [labelType, setLabelType] = useState<string>('Koli etiketi');
@@ -85,6 +87,70 @@ const LabelGenerator: React.FC = () => {
       return y + lineHeight; // next y
     };
 
+    // EAN-13 hesaplama/çizim yardımcıları
+    const L = ['0001101','0011001','0010011','0111101','0100011','0110001','0101111','0111011','0110111','0001011'];
+    const G = ['0100111','0110011','0011011','0100001','0011101','0111001','0000101','0010001','0001001','0010111'];
+    const R = ['1110010','1100110','1101100','1000010','1011100','1001110','1010000','1000100','1001000','1110100'];
+    const PARITY: Record<string,string> = {
+      '0':'LLLLLL','1':'LLGLGG','2':'LLGGLG','3':'LLGGGL','4':'LGLLGG','5':'LGGLLG','6':'LGGGLL','7':'LGLGLG','8':'LGLGGL','9':'LGGLGL'
+    };
+    const toEAN13 = (input?: string): string | null => {
+      if (!input) return null;
+      const digits = input.replace(/\D/g, '');
+      if (digits.length !== 12 && digits.length !== 13) return null;
+      const arr = digits.split('').map(d => parseInt(d, 10));
+      const base = arr.slice(0,12);
+      const checksum = (10 - ((base.reduce((sum, d, i) => sum + d * (i % 2 === 0 ? 1 : 3), 0)) % 10)) % 10;
+      if (arr.length === 13 && arr[12] !== checksum) return null;
+      return base.join('') + String(checksum);
+    };
+    const drawEAN13 = (code: string, x: number, y: number, widthMm: number, heightMm: number) => {
+      const first = code[0];
+      const leftDigits = code.slice(1,7);
+      const rightDigits = code.slice(7);
+      const parity = PARITY[first];
+      // 95 modul (3 + 42 + 5 + 42 + 3)
+      const totalModules = 95;
+      const modulePx = Math.max(1, Math.floor(mmToPx(widthMm) / totalModules));
+      const heightPx = mmToPx(heightMm);
+      let pos = x;
+      const drawModules = (pattern: string, extraGuard = false) => {
+        for (let i = 0; i < pattern.length; i++) {
+          if (pattern[i] === '1') {
+            ctx.fillRect(pos, y, modulePx, heightPx + (extraGuard ? mmToPx(2) : 0));
+          }
+          pos += modulePx;
+        }
+      };
+      ctx.fillStyle = '#000';
+      // start guard 101
+      drawModules('101', true);
+      // left six digits
+      for (let i = 0; i < 6; i++) {
+        const d = parseInt(leftDigits[i], 10);
+        const enc = parity[i] === 'L' ? L[d] : G[d];
+        drawModules(enc);
+      }
+      // center guard 01010
+      drawModules('01010', true);
+      // right six digits (R)
+      for (let i = 0; i < 6; i++) {
+        const d = parseInt(rightDigits[i], 10);
+        drawModules(R[d]);
+      }
+      // end guard 101
+      drawModules('101', true);
+      // human readable text
+      ctx.font = `${mmToPx(3)}px Arial`;
+      ctx.textBaseline = 'top';
+      const textY = y + heightPx + mmToPx(2);
+      ctx.fillText(code[0], x - mmToPx(3), textY);
+      const leftText = code.slice(1,7).split('').join(' ');
+      const rightText = code.slice(7).split('').join(' ');
+      ctx.fillText(leftText, x + modulePx * 4, textY);
+      ctx.fillText(rightText, x + modulePx * 50, textY);
+    };
+
     switch (labelType) {
       case 'Koli etiketi':
         // Başlık
@@ -109,13 +175,14 @@ const LabelGenerator: React.FC = () => {
         if (labelData.expiryDate) addLine(`SKT: ${labelData.expiryDate}`);
         if (labelData.supplier) addLine(`Tedarikçi: ${labelData.supplier}`);
 
-        // Alt kısımda barkod simülasyonu (kırpılmaması için kontrol)
-        const barY = Math.min(mmToPx(labelHeight - 10), y + mmToPx(3));
-        ctx.fillStyle = '#333';
-        ctx.fillRect(left, barY, mmToPx(60), mmToPx(8));
-        ctx.fillStyle = 'white';
-        ctx.font = `${mmToPx(2.5)}px Arial`;
-        ctx.fillText('8681917311582', left + mmToPx(2), barY + mmToPx(1));
+        // Barkod (EAN-13)
+        const ean = toEAN13(labelData.barcode);
+        if (ean) {
+          const barWidthMm = labelWidth - 12;
+          const barLeft = left;
+          const barTop = Math.min(mmToPx(labelHeight - 20), y + mmToPx(2));
+          drawEAN13(ean, barLeft, barTop, barWidthMm, 12);
+        }
         break;
         
       case 'Numune Etiketi':
@@ -368,6 +435,18 @@ const LabelGenerator: React.FC = () => {
                 className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 placeholder="Örn: Zeytinyağlı Kastil Sabunu"
               />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Barkod (EAN-13)</label>
+              <input
+                type="text"
+                value={labelData.barcode || ''}
+                onChange={(e) => setLabelData({ ...labelData, barcode: e.target.value })}
+                className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="5901234123457"
+              />
+              <p className="text-xs text-gray-500 mt-1">12 haneli girerseniz son haneyi otomatik hesaplarız</p>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
