@@ -36,6 +36,10 @@ const LabelGenerator: React.FC = () => {
   const [dpi, setDpi] = useState<203 | 300 | 600>(203);
   const [darkness, setDarkness] = useState<number>(1);
   const [zplDarkness, setZplDarkness] = useState<number>(15); // ^MD 0-30
+  const [zoom, setZoom] = useState<number>(() => {
+    const saved = Number(localStorage.getItem('label_zoom') || '1');
+    return isNaN(saved) ? 1 : Math.min(3, Math.max(0.5, saved));
+  });
   const [zplCode, setZplCode] = useState('');
   const [showPreview, setShowPreview] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -62,8 +66,33 @@ const LabelGenerator: React.FC = () => {
     } catch { return defaultAnchors; }
   });
   useEffect(() => { try { localStorage.setItem('label_anchors_v1', JSON.stringify(anchors)); } catch {} }, [anchors]);
+  useEffect(() => { try { localStorage.setItem('label_zoom', String(zoom)); } catch {} }, [zoom]);
   const [dragKey, setDragKey] = useState<AnchorKey | null>(null);
   const [dragOffset, setDragOffset] = useState<{dx:number; dy:number}>({ dx: 0, dy: 0 });
+  const [resizingKey, setResizingKey] = useState<AnchorKey | null>(null);
+  const [resizeStart, setResizeStart] = useState<{x0:number; y0:number; wMm:number; hMm:number; productFont:number; productWrap:number; titleFont:number; detailsGap:number; detailsFont:number; bcHeight:number; bcScale:number}>({ x0:0, y0:0, wMm:0, hMm:0, productFont:0, productWrap:0, titleFont:0, detailsGap:0, detailsFont:0, bcHeight:0, bcScale:1 });
+
+  // Bireysel boyut ayarları (mm) – her eleman için
+  type ElementStyles = {
+    title: { font: number; widthMm: number };
+    productName: { font: number; wrapWidth: number };
+    details: { font: number; lineGap: number; widthMm: number };
+    barcode: { height: number; widthMm: number };
+  };
+  const defaultStyles: ElementStyles = {
+    title: { font: 5, widthMm: 50 },
+    productName: { font: 4, wrapWidth: 92 },
+    details: { font: 3.2, lineGap: 4.2, widthMm: 92 },
+    barcode: { height: 12, widthMm: 60 }
+  };
+  const [styles, setStyles] = useState<ElementStyles>(() => {
+    try {
+      const saved = localStorage.getItem('label_styles_v1');
+      return saved ? { ...defaultStyles, ...JSON.parse(saved) } : defaultStyles;
+    } catch { return defaultStyles; }
+  });
+  useEffect(() => { try { localStorage.setItem('label_styles_v1', JSON.stringify(styles)); } catch {} }, [styles]);
+  // not used yet – future inline selection
 
   // ZPL'i görsel olarak render et (raster baskı için canvas, DPI'ya göre gerçek boyut)
   const renderZPLPreview = () => {
@@ -175,21 +204,21 @@ const LabelGenerator: React.FC = () => {
     switch (labelType) {
       case 'Koli etiketi':
         // Başlık
-        ctx.font = `bold ${mmToPx(5)}px Arial`;
+        ctx.font = `bold ${mmToPx(styles.title.font)}px Arial`;
         ctx.fillText('OLIVOS', mmToPx(anchors.title.x), mmToPx(anchors.title.y));
 
         // Ürün adı (sararak)
-        ctx.font = `${mmToPx(4)}px Arial`;
+        ctx.font = `${mmToPx(styles.productName.font)}px Arial`;
         let y = mmToPx(anchors.productName.y);
         const left = mmToPx(anchors.productName.x);
-        const maxW = mmToPx(labelWidth - 12);
-        y = wrapText(labelData.productName, left, y, maxW, mmToPx(5));
+        const maxW = mmToPx(Math.min(labelWidth - anchors.productName.x - 6, styles.productName.wrapWidth));
+        y = wrapText(labelData.productName, left, y, maxW, mmToPx(styles.details.lineGap));
 
         // Diğer alanlar (daha küçük yazı)
-        ctx.font = `${mmToPx(3.2)}px Arial`;
+        ctx.font = `${mmToPx(styles.details.font)}px Arial`;
         let detX = mmToPx(anchors.details.x);
         let detY = mmToPx(anchors.details.y);
-        const stepY = mmToPx(4.2);
+        const stepY = mmToPx(styles.details.lineGap);
         const addLine = (text: string) => { ctx.fillText(text, detX, detY); detY += stepY; };
         if (labelData.amount) addLine(`Miktar: ${labelData.amount}`);
         if (labelData.serialNumber) addLine(`Seri: ${labelData.serialNumber}`);
@@ -202,10 +231,10 @@ const LabelGenerator: React.FC = () => {
         // Barkod (EAN-13)
         const ean = toEAN13(labelData.barcode);
         if (ean) {
-          const barWidthMm = Math.max(20, labelWidth - anchors.barcode.x - 6);
+          const barWidthMm = Math.max(20, styles.barcode.widthMm);
           const barLeft = mmToPx(anchors.barcode.x);
           const barTop = mmToPx(anchors.barcode.y);
-          drawEAN13(ean, barLeft, barTop, barWidthMm, 12);
+          drawEAN13(ean, barLeft, barTop, barWidthMm, styles.barcode.height);
         }
         break;
         
@@ -275,7 +304,7 @@ const LabelGenerator: React.FC = () => {
     if (showPreview) {
       renderZPLPreview();
     }
-  }, [labelData, labelType, labelWidth, labelHeight, showPreview, darkness]);
+  }, [labelData, labelType, labelWidth, labelHeight, showPreview, darkness, anchors, styles]);
 
   const generateZPL = () => {
     let zpl = '';
@@ -639,6 +668,38 @@ const LabelGenerator: React.FC = () => {
                 <p className="text-xs text-gray-500 mt-1">Düşük = açık, yüksek = daha koyu baskı</p>
               </div>
             </div>
+
+            {/* Bireysel boyut ayarları (mm) */}
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mt-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Başlık Font (mm)</label>
+                <input type="number" step={0.1} value={styles.title.font} onChange={(e)=>setStyles({...styles, title:{...styles.title, font:Number(e.target.value)}})} className="w-full p-2 border border-gray-300 rounded" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Ürün Font (mm)</label>
+                <input type="number" step={0.1} value={styles.productName.font} onChange={(e)=>setStyles({...styles, productName:{...styles.productName, font:Number(e.target.value)}})} className="w-full p-2 border border-gray-300 rounded" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Ürün Sarma Genişliği (mm)</label>
+                <input type="number" step={0.1} value={styles.productName.wrapWidth} onChange={(e)=>setStyles({...styles, productName:{...styles.productName, wrapWidth:Number(e.target.value)}})} className="w-full p-2 border border-gray-300 rounded" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Detay Font (mm)</label>
+                <input type="number" step={0.1} value={styles.details.font} onChange={(e)=>setStyles({...styles, details:{...styles.details, font:Number(e.target.value)}})} className="w-full p-2 border border-gray-300 rounded" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Satır Aralığı (mm)</label>
+                <input type="number" step={0.1} value={styles.details.lineGap} onChange={(e)=>setStyles({...styles, details:{...styles.details, lineGap:Number(e.target.value)}})} className="w-full p-2 border border-gray-300 rounded" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Barkod Yükseklik (mm)</label>
+                <input type="number" step={0.1} value={styles.barcode.height} onChange={(e)=>setStyles({...styles, barcode:{...styles.barcode, height:Number(e.target.value)}})} className="w-full p-2 border border-gray-300 rounded" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Barkod Genişliği (mm)</label>
+                <input type="number" step={0.1} min={20} value={styles.barcode.widthMm} onChange={(e)=>setStyles({...styles, barcode:{...styles.barcode, widthMm:Number(e.target.value)}})} className="w-full p-2 border border-gray-300 rounded" />
+              </div>
+            </div>
             </div>
           </div>
 
@@ -687,8 +748,8 @@ const LabelGenerator: React.FC = () => {
                 ref={canvasRef}
                 className="w-full h-auto border border-gray-300"
                 style={{ 
-                  width: `${labelWidth * 3.78}px`, 
-                  height: `${labelHeight * 3.78}px`,
+                  width: `${labelWidth * 3.78 * zoom}px`, 
+                  height: `${labelHeight * 3.78 * zoom}px`,
                   maxWidth: '100%'
                 }}
               />
@@ -697,35 +758,106 @@ const LabelGenerator: React.FC = () => {
                   {(['title','productName','details','barcode'] as const).map((key) => (
                     <div
                       key={key}
-                      className="absolute bg-blue-500/20 border border-blue-500 text-[10px] text-blue-800 rounded px-1 py-0.5 pointer-events-auto cursor-move"
+                      className="absolute bg-blue-500/10 border border-blue-500 text-[10px] text-blue-800 rounded pointer-events-auto"
                       style={{
-                        left: `${anchors[key].x * 3.78}px`,
-                        top: `${anchors[key].y * 3.78}px`
+                        left: `${anchors[key].x * 3.78 * zoom}px`,
+                        top: `${anchors[key].y * 3.78 * zoom}px`,
+                        width: (()=>{
+                          const base = 3.78 * zoom;
+                          if (key==='productName') return `${styles.productName.wrapWidth * base}px`;
+                          if (key==='barcode') return `${styles.barcode.widthMm * base}px`;
+                          if (key==='details') return `${styles.details.widthMm * base}px`;
+                          return `${styles.title.widthMm * base}px`;
+                        })(),
+                        height: (()=>{
+                          const base = 3.78 * zoom;
+                          if (key==='title') return `${(styles.title.font + 2) * base}px`;
+                          if (key==='productName') return `${(styles.productName.font * 2 + styles.details.lineGap) * base}px`;
+                          if (key==='details') return `${(styles.details.lineGap * 6) * base}px`;
+                          return `${(styles.barcode.height + 8) * base}px`;
+                        })(),
+                        cursor: 'move'
                       }}
                       onMouseDown={(e) => {
                         setDragKey(key);
                         const rect = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
-                        setDragOffset({ dx: e.clientX - (rect.left + anchors[key].x * 3.78), dy: e.clientY - (rect.top + anchors[key].y * 3.78) });
+                        setDragOffset({ dx: e.clientX - (rect.left + anchors[key].x * 3.78 * zoom), dy: e.clientY - (rect.top + anchors[key].y * 3.78 * zoom) });
                       }}
                       onMouseMove={(e) => {
                         if (dragKey !== key) return;
                         const parent = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
-                        const x = (e.clientX - parent.left - dragOffset.dx) / 3.78;
-                        const y = (e.clientY - parent.top - dragOffset.dy) / 3.78;
+                        const x = (e.clientX - parent.left - dragOffset.dx) / (3.78 * zoom);
+                        const y = (e.clientY - parent.top - dragOffset.dy) / (3.78 * zoom);
                         setAnchors((prev) => ({ ...prev, [key]: { x: Math.max(0, Math.min(labelWidth-5, x)), y: Math.max(0, Math.min(labelHeight-5, y)) } }));
                       }}
                       onMouseUp={() => setDragKey(null)}
                       onMouseLeave={() => setDragKey(null)}
-                    >{key}</div>
+                    >
+                      <div className="absolute left-1 top-1 text-[10px] px-1 py-0.5 bg-white/60 rounded">{key}</div>
+                      {/* Resize handle (sağ-alt) */}
+                      <div
+                        className="absolute right-0 bottom-0 w-3 h-3 bg-blue-600 cursor-se-resize"
+                        onMouseDown={(e) => {
+                          e.stopPropagation();
+                          setResizingKey(key);
+                          const parent = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
+                          setResizeStart({
+                            x0: e.clientX,
+                            y0: e.clientY,
+                            wMm: parseFloat(((parent.width)/(3.78*zoom)).toFixed(2)),
+                            hMm: parseFloat(((parent.height)/(3.78*zoom)).toFixed(2)),
+                            productFont: styles.productName.font,
+                            productWrap: styles.productName.wrapWidth,
+                            titleFont: styles.title.font,
+                            detailsGap: styles.details.lineGap,
+                            detailsFont: styles.details.font,
+                            bcHeight: styles.barcode.height,
+                            bcScale: 1
+                          });
+                        }}
+                        onMouseMove={(e) => {
+                          if (resizingKey !== key) return;
+                          const dxMm = (e.clientX - resizeStart.x0) / (3.78*zoom);
+                          const dyMm = (e.clientY - resizeStart.y0) / (3.78*zoom);
+                          if (key==='productName') {
+                            const newWrap = Math.max(20, resizeStart.productWrap + dxMm);
+                            const newFont = Math.max(2, resizeStart.productFont + dyMm);
+                            setStyles(s=>({...s, productName:{...s.productName, wrapWidth:newWrap, font:newFont}}));
+                          } else if (key==='title') {
+                            const newFont = Math.max(2, resizeStart.titleFont + dyMm);
+                            const newW = Math.max(10, resizeStart.wMm + dxMm);
+                            setStyles(s=>({...s, title:{...s.title, font:newFont, widthMm:newW}}));
+                          } else if (key==='details') {
+                            const newGap = Math.max(2, resizeStart.detailsGap + dyMm/2);
+                            const newFont = Math.max(2, resizeStart.detailsFont + dyMm/2);
+                            const newW = Math.max(20, resizeStart.wMm + dxMm);
+                            setStyles(s=>({...s, details:{...s.details, lineGap:newGap, font:newFont, widthMm:newW}}));
+                          } else if (key==='barcode') {
+                            const newW = Math.max(20, resizeStart.wMm + dxMm);
+                            const newH = Math.max(5, resizeStart.bcHeight + dyMm);
+                            setStyles(s=>({...s, barcode:{...s.barcode, widthMm:newW, height:newH}}));
+                          }
+                        }}
+                        onMouseUp={() => setResizingKey(null)}
+                        onMouseLeave={() => setResizingKey(null)}
+                      />
+                    </div>
                   ))}
                 </div>
               )}
             </div>
-            <div className="flex items-center justify-between mt-2">
+            <div className="flex items-center justify-between mt-2 gap-3 flex-wrap">
               <label className="inline-flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={editMode} onChange={(e)=>setEditMode(e.target.checked)} />
                 Düzenleme modu (Konumları sürükle-bırak)
               </label>
+              <div className="flex items-center gap-2 text-sm">
+                <span>Yakınlaştır:</span>
+                <button type="button" className="px-2 py-1 bg-gray-200 rounded hover:bg-gray-300" onClick={()=>setZoom(z=>Math.max(0.5, Number((z-0.1).toFixed(2))))}>-</button>
+                <input type="range" min={0.5} max={3} step={0.1} value={zoom} onChange={(e)=>setZoom(Number(e.target.value))} />
+                <button type="button" className="px-2 py-1 bg-gray-200 rounded hover:bg-gray-300" onClick={()=>setZoom(z=>Math.min(3, Number((z+0.1).toFixed(2))))}>+</button>
+                <span className="w-10 text-right">{Math.round(zoom*100)}%</span>
+              </div>
               <button
                 type="button"
                 className="text-xs px-2 py-1 bg-gray-200 rounded hover:bg-gray-300"
