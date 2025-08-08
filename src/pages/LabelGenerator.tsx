@@ -39,10 +39,31 @@ const LabelGenerator: React.FC = () => {
   const [zplCode, setZplCode] = useState('');
   const [showPreview, setShowPreview] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
   // Ajan vb. yok – sade mod
 
   // mm -> dots dönüşümü (ZPL koordinatları için)
   const mmToDots = (mm: number) => Math.round((dpi / 25.4) * mm);
+
+  // Drag&Drop edit modu ve konumlar (mm)
+  const [editMode, setEditMode] = useState(false);
+  type AnchorKey = 'title' | 'productName' | 'details' | 'barcode';
+  type Pos = { x: number; y: number };
+  const defaultAnchors: Record<AnchorKey, Pos> = {
+    title: { x: 6, y: 6 },
+    productName: { x: 6, y: 13 },
+    details: { x: 6, y: 26 },
+    barcode: { x: 6, y: 34 },
+  };
+  const [anchors, setAnchors] = useState<Record<AnchorKey, Pos>>(() => {
+    try {
+      const saved = localStorage.getItem('label_anchors_v1');
+      return saved ? { ...defaultAnchors, ...JSON.parse(saved) } : defaultAnchors;
+    } catch { return defaultAnchors; }
+  });
+  useEffect(() => { try { localStorage.setItem('label_anchors_v1', JSON.stringify(anchors)); } catch {} }, [anchors]);
+  const [dragKey, setDragKey] = useState<AnchorKey | null>(null);
+  const [dragOffset, setDragOffset] = useState<{dx:number; dy:number}>({ dx: 0, dy: 0 });
 
   // ZPL'i görsel olarak render et (raster baskı için canvas, DPI'ya göre gerçek boyut)
   const renderZPLPreview = () => {
@@ -155,18 +176,21 @@ const LabelGenerator: React.FC = () => {
       case 'Koli etiketi':
         // Başlık
         ctx.font = `bold ${mmToPx(5)}px Arial`;
-        ctx.fillText('OLIVOS', mmToPx(6), mmToPx(6));
+        ctx.fillText('OLIVOS', mmToPx(anchors.title.x), mmToPx(anchors.title.y));
 
         // Ürün adı (sararak)
         ctx.font = `${mmToPx(4)}px Arial`;
-        let y = mmToPx(13);
-        const left = mmToPx(6);
+        let y = mmToPx(anchors.productName.y);
+        const left = mmToPx(anchors.productName.x);
         const maxW = mmToPx(labelWidth - 12);
         y = wrapText(labelData.productName, left, y, maxW, mmToPx(5));
 
         // Diğer alanlar (daha küçük yazı)
         ctx.font = `${mmToPx(3.2)}px Arial`;
-        const addLine = (text: string) => { ctx.fillText(text, left, y); y += mmToPx(4.2); };
+        let detX = mmToPx(anchors.details.x);
+        let detY = mmToPx(anchors.details.y);
+        const stepY = mmToPx(4.2);
+        const addLine = (text: string) => { ctx.fillText(text, detX, detY); detY += stepY; };
         if (labelData.amount) addLine(`Miktar: ${labelData.amount}`);
         if (labelData.serialNumber) addLine(`Seri: ${labelData.serialNumber}`);
         if (labelData.batchNumber) addLine(`Parti: ${labelData.batchNumber}`);
@@ -178,9 +202,9 @@ const LabelGenerator: React.FC = () => {
         // Barkod (EAN-13)
         const ean = toEAN13(labelData.barcode);
         if (ean) {
-          const barWidthMm = labelWidth - 12;
-          const barLeft = left;
-          const barTop = Math.min(mmToPx(labelHeight - 20), y + mmToPx(2));
+          const barWidthMm = Math.max(20, labelWidth - anchors.barcode.x - 6);
+          const barLeft = mmToPx(anchors.barcode.x);
+          const barTop = mmToPx(anchors.barcode.y);
           drawEAN13(ean, barLeft, barTop, barWidthMm, 12);
         }
         break;
@@ -655,22 +679,61 @@ const LabelGenerator: React.FC = () => {
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-6">
           <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Etiket Önizleme</h3>
           
-          {/* Canvas Preview */}
-          {showPreview && (
-            <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-4 mb-4">
-              <div className="w-full max-w-md mx-auto bg-white dark:bg-gray-800 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-md p-4">
-                <canvas
-                  ref={canvasRef}
-                  className="w-full h-auto border border-gray-300"
-                  style={{ 
-                    width: `${labelWidth * 3.78}px`, 
-                    height: `${labelHeight * 3.78}px`,
-                    maxWidth: '100%'
-                  }}
-                />
-              </div>
+        {/* Canvas Preview + Drag Anchors */}
+        {showPreview && (
+          <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-4 mb-4">
+            <div className="w-full max-w-md mx-auto bg-white dark:bg-gray-800 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-md p-4 relative">
+              <canvas
+                ref={canvasRef}
+                className="w-full h-auto border border-gray-300"
+                style={{ 
+                  width: `${labelWidth * 3.78}px`, 
+                  height: `${labelHeight * 3.78}px`,
+                  maxWidth: '100%'
+                }}
+              />
+              {editMode && (
+                <div ref={overlayRef} className="absolute inset-4 pointer-events-none select-none">
+                  {(['title','productName','details','barcode'] as const).map((key) => (
+                    <div
+                      key={key}
+                      className="absolute bg-blue-500/20 border border-blue-500 text-[10px] text-blue-800 rounded px-1 py-0.5 pointer-events-auto cursor-move"
+                      style={{
+                        left: `${anchors[key].x * 3.78}px`,
+                        top: `${anchors[key].y * 3.78}px`
+                      }}
+                      onMouseDown={(e) => {
+                        setDragKey(key);
+                        const rect = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
+                        setDragOffset({ dx: e.clientX - (rect.left + anchors[key].x * 3.78), dy: e.clientY - (rect.top + anchors[key].y * 3.78) });
+                      }}
+                      onMouseMove={(e) => {
+                        if (dragKey !== key) return;
+                        const parent = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
+                        const x = (e.clientX - parent.left - dragOffset.dx) / 3.78;
+                        const y = (e.clientY - parent.top - dragOffset.dy) / 3.78;
+                        setAnchors((prev) => ({ ...prev, [key]: { x: Math.max(0, Math.min(labelWidth-5, x)), y: Math.max(0, Math.min(labelHeight-5, y)) } }));
+                      }}
+                      onMouseUp={() => setDragKey(null)}
+                      onMouseLeave={() => setDragKey(null)}
+                    >{key}</div>
+                  ))}
+                </div>
+              )}
             </div>
-          )}
+            <div className="flex items-center justify-between mt-2">
+              <label className="inline-flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={editMode} onChange={(e)=>setEditMode(e.target.checked)} />
+                Düzenleme modu (Konumları sürükle-bırak)
+              </label>
+              <button
+                type="button"
+                className="text-xs px-2 py-1 bg-gray-200 rounded hover:bg-gray-300"
+                onClick={() => setAnchors(defaultAnchors)}
+              >Konumları Sıfırla</button>
+            </div>
+          </div>
+        )}
 
           {/* ZPL Code Display */}
           {zplCode && (
