@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Printer, QrCode, Download, Upload } from 'lucide-react';
+import { Printer, QrCode, Download } from 'lucide-react';
+import { supabase } from '../lib/supabase';
 
 interface LabelData {
   productName: string;
@@ -46,6 +47,39 @@ const LabelGenerator: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
   // Ajan vb. yok – sade mod
+
+  // Şirket logoları (Supabase -> company_logo)
+  type CompanyLogo = { company_name: string; logo_url: string };
+  const [companyLogos, setCompanyLogos] = useState<CompanyLogo[]>([]);
+  const [selectedCompany, setSelectedCompany] = useState<string>('Olivos');
+  const [logoImages, setLogoImages] = useState<Record<string, HTMLImageElement | null>>({});
+
+  // Supabase'den logoları çek ve önbelleğe al
+  useEffect(() => {
+    const fetchLogos = async () => {
+      const { data, error } = await supabase
+        .from('company_logo')
+        .select('company_name, logo_url');
+      if (!error && data) {
+        setCompanyLogos(data as CompanyLogo[]);
+        // Varsayılan seçimi ayarla
+        const hasOlivos = (data as CompanyLogo[]).find((l) => l.company_name.toLowerCase().includes('olivos'));
+        if (hasOlivos) setSelectedCompany(hasOlivos.company_name);
+        else if ((data as CompanyLogo[])[0]) setSelectedCompany((data as CompanyLogo[])[0].company_name);
+
+        // Görselleri önceden yükle
+        (data as CompanyLogo[]).forEach((l) => {
+          if (!l.logo_url) return;
+          const img = new Image();
+          (img as any).crossOrigin = 'anonymous';
+          img.onload = () => setLogoImages((prev) => ({ ...prev, [l.company_name]: img }));
+          img.onerror = () => setLogoImages((prev) => ({ ...prev, [l.company_name]: null }));
+          img.src = l.logo_url;
+        });
+      }
+    };
+    fetchLogos();
+  }, []);
 
   // mm -> dots dönüşümü (ZPL koordinatları için)
   const mmToDots = (mm: number) => Math.round((dpi / 25.4) * mm);
@@ -204,9 +238,25 @@ const LabelGenerator: React.FC = () => {
 
     switch (labelType) {
       case 'Koli etiketi':
-        // Başlık
-        ctx.font = `bold ${mmToPx(styles.title.font)}px Arial`;
-        ctx.fillText('OLIVOS', mmToPx(anchors.title.x), mmToPx(anchors.title.y));
+        // Başlık: logo varsa çiz, yoksa metin
+        {
+          const logoImg = logoImages[selectedCompany];
+          if (logoImg) {
+            const targetHeightPx = mmToPx(styles.title.font + 4);
+            const ratio = logoImg.width / logoImg.height;
+            const targetWidthPx = Math.min(mmToPx(styles.title.widthMm), Math.round(targetHeightPx * ratio));
+            ctx.drawImage(
+              logoImg,
+              mmToPx(anchors.title.x),
+              mmToPx(anchors.title.y),
+              targetWidthPx,
+              targetHeightPx
+            );
+          } else {
+            ctx.font = `bold ${mmToPx(styles.title.font)}px Arial`;
+            ctx.fillText('OLIVOS', mmToPx(anchors.title.x), mmToPx(anchors.title.y));
+          }
+        }
 
         // Ürün adı (sararak)
         ctx.font = `${mmToPx(styles.productName.font)}px Arial`;
@@ -581,22 +631,26 @@ const LabelGenerator: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Logo (İsteğe Bağlı)</label>
-              <div className="flex items-center space-x-2">
-                <input
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  id="logo-upload"
-                />
-                <label
-                  htmlFor="logo-upload"
-                  className="flex items-center px-3 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 cursor-pointer"
-                >
-                  <Upload className="w-4 h-4 mr-2" />
-                  Logo Yükle
-                </label>
-                <span className="text-sm text-gray-500">PNG, JPG (Max 100KB)</span>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Şirket Logosu</label>
+              <div className="flex items-center gap-2 flex-wrap">
+                {companyLogos.map((l) => (
+                  <button
+                    key={l.company_name}
+                    type="button"
+                    onClick={() => setSelectedCompany(l.company_name)}
+                    className={`px-3 py-2 rounded border ${selectedCompany===l.company_name ? 'border-blue-500 text-blue-600' : 'border-gray-300 text-gray-700'} bg-white hover:bg-gray-50`}
+                    title={l.company_name}
+                  >
+                    {logoImages[l.company_name] ? (
+                      <img src={l.logo_url} alt={l.company_name} className="h-6 object-contain" />
+                    ) : (
+                      <span className="text-sm">{l.company_name}</span>
+                    )}
+                  </button>
+                ))}
+                {companyLogos.length===0 && (
+                  <span className="text-sm text-gray-500">Supabase'de 'company_logo' tablosunda kayıt bulunamadı.</span>
+                )}
               </div>
             </div>
 
