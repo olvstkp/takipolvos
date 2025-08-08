@@ -30,16 +30,14 @@ const LabelGenerator: React.FC = () => {
   // Etiket boyutu (mm) - 104 x 50.8 mm
   const [labelWidth, setLabelWidth] = useState<number>(104);
   const [labelHeight, setLabelHeight] = useState<number>(50.8);
-  // Yazıcı ayarları
+  // ZPL için DPI (isteğe bağlı) ve görsel baskı için koyuluk
   const [dpi, setDpi] = useState<203 | 300 | 600>(203);
-  const [printerHost, setPrinterHost] = useState<string>(localStorage.getItem('zebra_printer_host') || '192.168.1.150');
-  const [printerPort, setPrinterPort] = useState<number>(Number(localStorage.getItem('zebra_printer_port') || 9100));
-  const [agentPort, setAgentPort] = useState<number>(Number(localStorage.getItem('zebra_agent_port') || 18080));
+  const [darkness, setDarkness] = useState<number>(1);
+  const [zplDarkness, setZplDarkness] = useState<number>(15); // ^MD 0-30
   const [zplCode, setZplCode] = useState('');
   const [showPreview, setShowPreview] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [availablePrinters, setAvailablePrinters] = useState<string[]>([]);
-  const [selectedPrinter, setSelectedPrinter] = useState<string>(localStorage.getItem('zebra_printer_name') || '');
+  // Ajan vb. yok – sade mod
 
   // mm -> dots dönüşümü (ZPL koordinatları için)
   const mmToDots = (mm: number) => Math.round((dpi / 25.4) * mm);
@@ -65,29 +63,56 @@ const LabelGenerator: React.FC = () => {
     ctx.fillStyle = 'black';
     ctx.textBaseline = 'top';
 
+    // Basit metin sarma
+    const wrapText = (text: string, x: number, y: number, maxWidth: number, lineHeight: number) => {
+      const words = text.split(' ');
+      let line = '';
+      for (let n = 0; n < words.length; n++) {
+        const testLine = line + words[n] + ' ';
+        const metrics = ctx.measureText(testLine);
+        if (metrics.width > maxWidth && n > 0) {
+          ctx.fillText(line.trim(), x, y);
+          line = words[n] + ' ';
+          y += lineHeight;
+        } else {
+          line = testLine;
+        }
+      }
+      ctx.fillText(line.trim(), x, y);
+      return y + lineHeight; // next y
+    };
+
     switch (labelType) {
       case 'Koli etiketi':
-        // OLIVOS
-        ctx.font = 'bold 25px Arial';
-        ctx.fillText('OLIVOS', 20 * scale, 10 * scale);
-        
-        // Ürün adı
-        ctx.font = '20px Arial';
-        ctx.fillText(labelData.productName, 20 * scale, 35 * scale);
-        
-        // Miktar
-        ctx.font = '15px Arial';
-        ctx.fillText(labelData.amount, 20 * scale, 55 * scale);
-        
-        // Koli içi
-        ctx.fillText(`Koli İçi: ${labelData.batchNumber}`, 20 * scale, 70 * scale);
-        
-        // Barkod simülasyonu
+        // Başlık
+        ctx.font = 'bold 22px Arial';
+        ctx.fillText('OLIVOS', 6 * scale, 8 * scale);
+
+        // Ürün adı (sararak)
+        ctx.font = '16px Arial';
+        let y = 16 * scale;
+        const left = 6 * scale;
+        const maxW = (labelWidth - 12) * scale;
+        y = wrapText(labelData.productName, left, y, maxW, 6 * scale);
+
+        // Diğer alanlar (daha küçük yazı)
+        ctx.font = '13px Arial';
+        const addLine = (text: string) => { ctx.fillText(text, left, y); y += 5 * scale; };
+        if (labelData.amount) addLine(`Miktar: ${labelData.amount}`);
+        if (labelData.serialNumber) addLine(`Seri: ${labelData.serialNumber}`);
+        if (labelData.batchNumber) addLine(`Parti: ${labelData.batchNumber}`);
+        if (labelData.invoiceNumber) addLine(`İrsaliye: ${labelData.invoiceNumber}`);
+        if (labelData.entryDate) addLine(`Giriş: ${labelData.entryDate}`);
+        if (labelData.expiryDate) addLine(`SKT: ${labelData.expiryDate}`);
+        if (labelData.supplier) addLine(`Tedarikçi: ${labelData.supplier}`);
+
+        // Alt kısımda barkod simülasyonu (kırpılmaması için kontrol)
+        const barY = Math.min((labelHeight - 10) * scale, y + 4 * scale);
         ctx.fillStyle = '#333';
-        ctx.fillRect(20 * scale, 85 * scale, 60 * scale, 15 * scale);
+        ctx.fillRect(left, barY, 60 * scale, 10 * scale);
         ctx.fillStyle = 'white';
         ctx.font = '10px Arial';
-        ctx.fillText('8681917311582', 22 * scale, 87 * scale);
+        ctx.fillText('8681917311582', left + 2 * scale, barY + 1 * scale);
         break;
         
       case 'Numune Etiketi':
@@ -130,6 +155,19 @@ const LabelGenerator: React.FC = () => {
         ctx.fillRect(20 * scale, 156 * scale, 40 * scale, 40 * scale);
         break;
     }
+    // Koyuluk uygulaması (siyahları güçlendirme)
+    if (darkness && Math.abs(darkness - 1) > 0.01) {
+      const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const d = img.data;
+      const k = darkness; // >1 koyu, <1 daha açık
+      for (let i = 0; i < d.length; i += 4) {
+        // sadece gri tonlar üzerinde çalışıyoruz (siyah yazı, beyaz zemin)
+        d[i] = 255 - (255 - d[i]) * k;
+        d[i + 1] = 255 - (255 - d[i + 1]) * k;
+        d[i + 2] = 255 - (255 - d[i + 2]) * k;
+      }
+      ctx.putImageData(img, 0, 0);
+    }
   };
 
   // Canvas'ı güncelle
@@ -137,7 +175,7 @@ const LabelGenerator: React.FC = () => {
     if (showPreview) {
       renderZPLPreview();
     }
-  }, [labelData, labelType, labelWidth, labelHeight, showPreview]);
+  }, [labelData, labelType, labelWidth, labelHeight, showPreview, darkness]);
 
   const generateZPL = () => {
     let zpl = '';
@@ -148,6 +186,7 @@ const LabelGenerator: React.FC = () => {
       case 'Koli etiketi':
         zpl = `
 ^XA
+^MD${Math.min(30, Math.max(0, Math.round(zplDarkness)))}
 ^PW${PW}
 ^LL${LL}
 ^FO${mmToDots(20)},${mmToDots(10)}^A0N,${mmToDots(6)},${mmToDots(6)}^FDOLIVOS^FS
@@ -161,6 +200,7 @@ const LabelGenerator: React.FC = () => {
       case 'Numune Etiketi':
         zpl = `
 ^XA
+^MD${Math.min(30, Math.max(0, Math.round(zplDarkness)))}
 ^PW${PW}
 ^LL${LL}
 ^FO${mmToDots(20)},${mmToDots(10)}^A0N,${mmToDots(5)},${mmToDots(5)}^FDNUMUNE^FS
@@ -178,6 +218,7 @@ const LabelGenerator: React.FC = () => {
       case 'Yarı Mamül Etiketi':
         zpl = `
 ^XA
+^MD${Math.min(30, Math.max(0, Math.round(zplDarkness)))}
 ^PW${PW}
 ^LL${LL}
 ^FO${mmToDots(20)},${mmToDots(10)}^A0N,${mmToDots(5)},${mmToDots(5)}^FDYARI MAMÜL^FS
@@ -195,6 +236,7 @@ const LabelGenerator: React.FC = () => {
       default:
         zpl = `
 ^XA
+^MD${Math.min(30, Math.max(0, Math.round(zplDarkness)))}
 ^PW${PW}
 ^LL${LL}
 ^FO${mmToDots(50)},${mmToDots(50)}^A0N,${mmToDots(7)},${mmToDots(7)}^FD${labelData.productName}^FS
@@ -258,106 +300,7 @@ const LabelGenerator: React.FC = () => {
     }
   };
 
-  // Web Serial API ile doğrudan (Chrome) – kurulum gerektirmez, kullanıcı izni gerekir
-  const sendViaWebSerial = async () => {
-    if (!('serial' in navigator)) {
-      alert('Tarayıcı Web Serial API desteklemiyor. (Chrome/Edge gereklidir)');
-      return;
-    }
-    if (!zplCode) {
-      alert('Önce ZPL kodunu oluşturun.');
-      return;
-    }
-    try {
-      // Kullanıcıdan port seçmesini iste
-      // Zebra seri modda genellikle 9600/8N1
-      // Gerekirse cihaz ayarına göre baudRate güncellenebilir
-      // @ts-ignore
-      const port = await navigator.serial.requestPort();
-      await port.open({ baudRate: 9600 });
-      const writer = port.writable?.getWriter();
-      if (!writer) throw new Error('Yazıcıya yazma başlatılamadı');
-      const encoder = new TextEncoder();
-      await writer.write(encoder.encode(zplCode));
-      writer.releaseLock();
-      await port.close();
-      alert('Web Serial ile gönderildi.');
-    } catch (e: any) {
-      console.error('Web Serial hatası:', e);
-      alert(`Web Serial başarısız: ${e?.message || e}`);
-    }
-  };
-
-  // Zebra'ya (yerel ajan üzerinden) gönder
-  const sendToPrinter = async () => {
-    if (!zplCode) {
-      alert('Önce ZPL kodunu oluşturun.');
-      return;
-    }
-    try {
-      localStorage.setItem('zebra_printer_host', printerHost);
-      localStorage.setItem('zebra_printer_port', String(printerPort));
-      localStorage.setItem('zebra_agent_port', String(agentPort));
-
-      const res = await fetch(`http://localhost:${agentPort}/print`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ zpl: zplCode, host: printerHost, port: printerPort })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || 'Yazdırma hatası');
-      alert('Zebra yazıcıya gönderildi.');
-    } catch (err: any) {
-      console.error('Zebra gönderim hatası:', err);
-      alert(`Gönderim başarısız: ${err.message}. Lütfen yerel yazıcı ajanının çalıştığından emin olun.`);
-    }
-  };
-
-  // USB/Spooler üzerinden yazdır (yerel ajan /print-local)
-  const sendToLocalPrinter = async () => {
-    if (!zplCode) {
-      alert('Önce ZPL kodunu oluşturun.');
-      return;
-    }
-    if (!selectedPrinter) {
-      alert('Önce bir yazıcı seçin.');
-      return;
-    }
-    try {
-      localStorage.setItem('zebra_printer_name', selectedPrinter);
-      const res = await fetch(`http://localhost:${agentPort}/print-local`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ zpl: zplCode, printerName: selectedPrinter })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || 'Yazdırma hatası');
-      alert('Yerel yazıcıya gönderildi.');
-    } catch (err: any) {
-      console.error('Yerel yazdırma hatası:', err);
-      alert(`Yerel yazdırma başarısız: ${err.message}. Ajanın çalıştığını ve yazıcı adının doğru olduğunu kontrol edin.`);
-    }
-  };
-
-  // Ajan üzerinden yazıcı listesini çek
-  const fetchPrinters = async () => {
-    try {
-      const res = await fetch(`http://localhost:${agentPort}/printers`);
-      const data = await res.json();
-      if (res.ok) {
-        const names = (data?.printers || []).map((p: any) => p?.name || p);
-        setAvailablePrinters(names);
-        if (!selectedPrinter && names.length > 0) setSelectedPrinter(names[0]);
-      }
-    } catch (e) {
-      // ajan kapalı olabilir – sessiz geç
-    }
-  };
-
-  useEffect(() => {
-    fetchPrinters();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentPort]);
+  // Ekstra yazıcı yöntemleri kaldırıldı
 
   const downloadZPL = () => {
     if (zplCode) {
@@ -539,78 +482,44 @@ const LabelGenerator: React.FC = () => {
                   />
                 </div>
               </div>
-            {/* Yazıcı/DPI Ayarları */}
+            {/* Görsel/ZPL koyuluk ayarları */}
             <div className="grid grid-cols-2 gap-4 mt-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">DPI</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">DPI (ZPL için)</label>
                 <select
                   value={dpi}
                   onChange={(e) => setDpi(Number(e.target.value) as 203 | 300 | 600)}
                   className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 >
-                  <option value={203}>203 dpi (8 dpmm)</option>
-                  <option value={300}>300 dpi (12 dpmm)</option>
-                  <option value={600}>600 dpi (24 dpmm)</option>
+                  <option value={203}>203 dpi</option>
+                  <option value={300}>300 dpi</option>
+                  <option value={600}>600 dpi</option>
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Ajan Portu (Yerel)</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Koyuluk (Önizleme)</label>
                 <input
-                  type="number"
-                  value={agentPort}
-                  onChange={(e) => setAgentPort(Number(e.target.value))}
-                  className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  min={1024}
-                  max={65535}
+                  type="range"
+                  min={0.6}
+                  max={2}
+                  step={0.05}
+                  value={darkness}
+                  onChange={(e) => setDarkness(Number(e.target.value))}
+                  className="w-full"
                 />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4 mt-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Zebra Yazıcı IP</label>
-                <input
-                  type="text"
-                  value={printerHost}
-                  onChange={(e) => setPrinterHost(e.target.value)}
-                  className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="192.168.1.150"
-                />
+                <div className="text-xs text-gray-500 mt-1">{Math.round(darkness * 100)}%</div>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Yazıcı Portu</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">ZPL Darkness (^MD 0-30)</label>
                 <input
                   type="number"
-                  value={printerPort}
-                  onChange={(e) => setPrinterPort(Number(e.target.value))}
+                  min={0}
+                  max={30}
+                  value={zplDarkness}
+                  onChange={(e) => setZplDarkness(Math.max(0, Math.min(30, Number(e.target.value))))}
                   className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  min={1}
-                  max={65535}
                 />
-              </div>
-            </div>
-            {/* USB/Spooler Yazıcı Seçimi */}
-            <div className="grid grid-cols-2 gap-4 mt-4">
-              <div className="col-span-2">
-                <label className="block text-sm font-medium text-gray-700 mb-1">Yerel Yazıcı (USB/Spooler)</label>
-                <div className="flex gap-2">
-                  <select
-                    value={selectedPrinter}
-                    onChange={(e) => setSelectedPrinter(e.target.value)}
-                    className="flex-1 p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  >
-                    <option value="">— Yazıcı seçin —</option>
-                    {availablePrinters.map((p) => (
-                      <option key={p} value={p}>{p}</option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    onClick={fetchPrinters}
-                    className="px-3 py-2 bg-gray-200 rounded-md hover:bg-gray-300"
-                  >
-                    Yenile
-                  </button>
-                </div>
+                <p className="text-xs text-gray-500 mt-1">Düşük = açık, yüksek = daha koyu baskı</p>
               </div>
             </div>
             </div>
@@ -645,32 +554,7 @@ const LabelGenerator: React.FC = () => {
               </button>
           </div>
 
-          <div className="grid grid-cols-1 gap-3">
-            <button
-              onClick={sendToPrinter}
-              disabled={!zplCode}
-              className="flex items-center justify-center px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:bg-indigo-300 disabled:cursor-not-allowed"
-            >
-              <Printer className="w-4 h-4 mr-2" />
-              Zebra'ya Gönder (Yerel Ajan)
-            </button>
-            <button
-              onClick={sendToLocalPrinter}
-              disabled={!zplCode}
-              className="flex items-center justify-center px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 disabled:bg-purple-300 disabled:cursor-not-allowed"
-            >
-              <Printer className="w-4 h-4 mr-2" />
-              USB/Spooler ile Yazdır (Ajan)
-            </button>
-            <button
-              onClick={sendViaWebSerial}
-              disabled={!zplCode}
-              className="flex items-center justify-center px-4 py-2 bg-teal-600 text-white rounded-md hover:bg-teal-700 disabled:bg-teal-300 disabled:cursor-not-allowed"
-            >
-              <Printer className="w-4 h-4 mr-2" />
-              Web Serial ile Gönder (Kurulumsuz)
-            </button>
-            </div>
+          {/* Diğer yazdırma yöntemleri kaldırıldı */}
           </div>
         </div>
 
