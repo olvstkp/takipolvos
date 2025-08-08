@@ -34,8 +34,8 @@ const LabelGenerator: React.FC = () => {
   const [labelHeight, setLabelHeight] = useState<number>(50.8);
   // ZPL için DPI (isteğe bağlı) ve görsel baskı için koyuluk
   const [dpi, setDpi] = useState<203 | 300 | 600>(203);
-  const [darkness, setDarkness] = useState<number>(1);
-  const [zplDarkness, setZplDarkness] = useState<number>(15); // ^MD 0-30
+  const [darkness, setDarkness] = useState<number>(2);
+  const [zplDarkness, setZplDarkness] = useState<number>(30); // ^MD 0-30
   const [showAdvancedSettings, setShowAdvancedSettings] = useState<boolean>(false);
   const [zoom, setZoom] = useState<number>(() => {
     const saved = Number(localStorage.getItem('label_zoom') || '1');
