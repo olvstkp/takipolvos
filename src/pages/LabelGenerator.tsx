@@ -1,6 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Printer, QrCode, Download } from 'lucide-react';
+import { Printer, QrCode, Download, Type, Barcode as BarcodeIcon, Image as ImageIcon, ZoomIn, ZoomOut, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import FreeItemsPanel from '../components/FreeItemsPanel';
+import PreviewCanvas from '../components/PreviewCanvas';
+import StandardForm from '../components/StandardForm';
 
 interface LabelData {
   productName: string;
@@ -17,16 +20,16 @@ interface LabelData {
 
 const LabelGenerator: React.FC = () => {
   const [labelData, setLabelData] = useState<LabelData>({
-    productName: 'ZEYTİNYAĞLI BALLI SIVI SABUN',
-    serialNumber: 'ZBS-2024-001',
-    entryDate: '2024-12-28',
-    expiryDate: '2025-12-28',
-    amount: '12 PCS X 450 ML',
-    invoiceNumber: 'INV-2024-001',
-    batchNumber: 'BATCH-20241228',
-    supplier: 'Akdeniz Gıda Ltd. Şti.',
+    productName: '',
+    serialNumber: '',
+    entryDate: '',
+    expiryDate: '',
+    amount: '',
+    invoiceNumber: '',
+    batchNumber: '',
+    supplier: '',
     logo: '',
-    barcode: '5901234123457'
+    barcode: ''
   });
 
   const [labelType, setLabelType] = useState<string>('Koli etiketi');
@@ -47,6 +50,10 @@ const LabelGenerator: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
   // Ajan vb. yok – sade mod
+  // Resize yumuşatma: hız ve easing
+  const RESIZE_SENS = 0.050; // daha düşük = daha az hassas
+  const RESIZE_SMOOTH = 0.015; // daha düşük = daha yumuşak/istekleri daha yavaş takip eder
+  const resizeDeltaRef = useRef<{dx:number; dy:number}>({ dx:0, dy:0 });
 
   // Şirket logoları (Supabase -> company_logo)
   type CompanyLogo = { company_name: string; logo_url: string };
@@ -84,6 +91,22 @@ const LabelGenerator: React.FC = () => {
   // mm -> dots dönüşümü (ZPL koordinatları için)
   const mmToDots = (mm: number) => Math.round((dpi / 25.4) * mm);
 
+  // EAN-13 doğrulama/normalize
+  const normalizeEan13 = (input?: string): { normalized: string | null; error?: string; checksum?: number } => {
+    if (!input) return { normalized: null, error: 'Boş barkod' };
+    const digitsOnly = String(input).replace(/\D/g, '');
+    if (digitsOnly.length !== 12 && digitsOnly.length !== 13) {
+      return { normalized: null, error: 'EAN-13, 12 veya 13 haneli olmalı' };
+    }
+    const arr = digitsOnly.split('').map(d => parseInt(d, 10));
+    const base = arr.slice(0, 12);
+    const checksum = (10 - ((base.reduce((sum, d, i) => sum + d * (i % 2 === 0 ? 1 : 3), 0)) % 10)) % 10;
+    if (arr.length === 13 && arr[12] !== checksum) {
+      return { normalized: null, error: `Checksum uyuşmuyor (beklenen ${checksum})`, checksum };
+    }
+    return { normalized: base.join('') + String(checksum), checksum };
+  };
+
   // Drag&Drop edit modu ve konumlar (mm)
   const [editMode, setEditMode] = useState(false);
   type AnchorKey = 'title' | 'productName' | 'details' | 'barcode';
@@ -103,9 +126,15 @@ const LabelGenerator: React.FC = () => {
   useEffect(() => { try { localStorage.setItem('label_anchors_v1', JSON.stringify(anchors)); } catch {} }, [anchors]);
   useEffect(() => { try { localStorage.setItem('label_zoom', String(zoom)); } catch {} }, [zoom]);
   const [dragKey, setDragKey] = useState<AnchorKey | null>(null);
+  // Daha smooth sürükleme için global drag state
+  const [draggingAnchorKey, setDraggingAnchorKey] = useState<AnchorKey | null>(null);
+  const [draggingFreeId, setDraggingFreeId] = useState<string | null>(null);
   const [dragOffset, setDragOffset] = useState<{dx:number; dy:number}>({ dx: 0, dy: 0 });
   const [resizingKey, setResizingKey] = useState<AnchorKey | null>(null);
   const [resizeStart, setResizeStart] = useState<{x0:number; y0:number; wMm:number; hMm:number; productFont:number; productWrap:number; titleFont:number; detailsGap:number; detailsFont:number; bcHeight:number; bcScale:number}>({ x0:0, y0:0, wMm:0, hMm:0, productFont:0, productWrap:0, titleFont:0, detailsGap:0, detailsFont:0, bcHeight:0, bcScale:1 });
+  // Global resize hedefleri
+  const [resizingAnchorKeyGlobal, setResizingAnchorKeyGlobal] = useState<AnchorKey | null>(null);
+  const [resizingFreeIdGlobal, setResizingFreeIdGlobal] = useState<string | null>(null);
 
   // Bireysel boyut ayarları (mm) – her eleman için
   type ElementStyles = {
@@ -129,6 +158,125 @@ const LabelGenerator: React.FC = () => {
   useEffect(() => { try { localStorage.setItem('label_styles_v1', JSON.stringify(styles)); } catch {} }, [styles]);
   // not used yet – future inline selection
 
+  // Görünürlük yönetimi (eleman kaldırma/gizleme)
+  const defaultVisibility: Record<AnchorKey, boolean> = {
+    title: true,
+    productName: true,
+    details: true,
+    barcode: true,
+  };
+  const [visible, setVisible] = useState<Record<AnchorKey, boolean>>(() => {
+    try {
+      const saved = localStorage.getItem('label_visibility_v1');
+      return saved ? { ...defaultVisibility, ...JSON.parse(saved) } : defaultVisibility;
+    } catch { return defaultVisibility; }
+  });
+  useEffect(() => { try { localStorage.setItem('label_visibility_v1', JSON.stringify(visible)); } catch {} }, [visible]);
+
+  // Serbest Mod öğeleri
+  type FreeItemType = 'text' | 'barcode' | 'image' | 'line' | 'circle' | 'ring';
+  type FreeItem = {
+    id: string;
+    type: FreeItemType;
+    x: number; // mm
+    y: number; // mm
+    widthMm?: number; // barcode/image
+    heightMm?: number; // barcode/image
+    text?: string; // text/barcode digits
+    fontMm?: number; // text
+    wrapWidthMm?: number; // text
+    src?: string; // image data url
+    zIndex?: number; // katmanlama
+  };
+  const [freeMode, setFreeMode] = useState<boolean>(false);
+  const [freeItems, setFreeItems] = useState<FreeItem[]>([]);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const freeImageCache = useRef<Record<string, HTMLImageElement>>({});
+  const [showFreeDialog, setShowFreeDialog] = useState<boolean>(false);
+  const [freeDraft, setFreeDraft] = useState<Partial<FreeItem> & { type: FreeItemType } | null>(null);
+  const [editingFreeId, setEditingFreeId] = useState<string | null>(null);
+  const [freeEditContext, setFreeEditContext] = useState<'preview'|'workspace'>('preview');
+  const [showFreeWorkspace, setShowFreeWorkspace] = useState<boolean>(false);
+  const [wsItems, setWsItems] = useState<FreeItem[]>([]);
+  const wsCanvasRef = useRef<HTMLCanvasElement>(null);
+  const [wsZoom, setWsZoom] = useState<number>(1);
+  const [wsRemoveId, setWsRemoveId] = useState<string | null>(null);
+  // Izgara ve hizalama
+  const [showGrid, setShowGrid] = useState<boolean>(true);
+  const [snapToGrid, setSnapToGrid] = useState<boolean>(true);
+  const [gridMm, setGridMm] = useState<number>(2);
+  const [selectedFreeId, setSelectedFreeId] = useState<string | null>(null);
+
+  // Global mousemove/mouseup ile sürüklemeyi pürüzsüz yap
+  useEffect(() => {
+    const handleMove = (e: MouseEvent) => {
+      if (!overlayRef.current) return;
+      const parent = overlayRef.current.getBoundingClientRect();
+      const base = 3.78 * zoom;
+      if (draggingAnchorKey) {
+        let x = (e.clientX - parent.left - dragOffset.dx) / base;
+        let y = (e.clientY - parent.top - dragOffset.dy) / base;
+        if (snapToGrid) { const g = gridMm; x = Math.round(x/g)*g; y = Math.round(y/g)*g; }
+        setAnchors(prev => ({ ...prev, [draggingAnchorKey]: { x: Math.max(0, Math.min(labelWidth-5, x)), y: Math.max(0, Math.min(labelHeight-5, y)) } }));
+      } else if (draggingFreeId) {
+        let x = (e.clientX - parent.left - dragOffset.dx) / base;
+        let y = (e.clientY - parent.top - dragOffset.dy) / base;
+        if (snapToGrid) { const g = gridMm; x = Math.round(x/g)*g; y = Math.round(y/g)*g; }
+        setFreeItems(arr => arr.map(it => it.id===draggingFreeId ? { ...it, x: Math.max(0, Math.min(labelWidth-5, x)), y: Math.max(0, Math.min(labelHeight-5, y)) } : it));
+      } else if (resizingAnchorKeyGlobal) {
+        const key = resizingAnchorKeyGlobal;
+        // hedef delta
+        const rawDx = (e.clientX - resizeStart.x0) / base;
+        const rawDy = (e.clientY - resizeStart.y0) / base;
+        // küçük hareketleri filtrele
+        const targetDx = Math.abs(rawDx) < 0.2 ? 0 : rawDx * RESIZE_SENS;
+        const targetDy = Math.abs(rawDy) < 0.2 ? 0 : rawDy * RESIZE_SENS;
+        // yumuşatma (lerp)
+        resizeDeltaRef.current.dx = resizeDeltaRef.current.dx + (targetDx - resizeDeltaRef.current.dx) * RESIZE_SMOOTH;
+        resizeDeltaRef.current.dy = resizeDeltaRef.current.dy + (targetDy - resizeDeltaRef.current.dy) * RESIZE_SMOOTH;
+        const dxMm = resizeDeltaRef.current.dx;
+        const dyMm = resizeDeltaRef.current.dy;
+        setStyles(s=>{
+          if (key==='productName') {
+            return { ...s, productName: { ...s.productName, wrapWidth: Math.max(20, resizeStart.productWrap + dxMm), font: Math.max(2, resizeStart.productFont + dyMm) } };
+          } else if (key==='title') {
+            return { ...s, title: { ...s.title, widthMm: Math.max(10, resizeStart.wMm + dxMm), font: Math.max(2, resizeStart.titleFont + dyMm) } };
+          } else if (key==='details') {
+            return { ...s, details: { ...s.details, widthMm: Math.max(20, resizeStart.wMm + dxMm), lineGap: Math.max(2, resizeStart.detailsGap + dyMm/2), font: Math.max(2, resizeStart.detailsFont + dyMm/2) } };
+          } else if (key==='barcode') {
+            return { ...s, barcode: { ...s.barcode, widthMm: Math.max(20, resizeStart.wMm + dxMm), height: Math.max(5, resizeStart.bcHeight + dyMm) } };
+          }
+          return s;
+        });
+      } else if (resizingFreeIdGlobal) {
+        const rawDx = (e.clientX - resizeStart.x0) / base;
+        const rawDy = (e.clientY - resizeStart.y0) / base;
+        const targetDx = Math.abs(rawDx) < 0.2 ? 0 : rawDx * RESIZE_SENS;
+        const targetDy = Math.abs(rawDy) < 0.2 ? 0 : rawDy * RESIZE_SENS;
+        resizeDeltaRef.current.dx = resizeDeltaRef.current.dx + (targetDx - resizeDeltaRef.current.dx) * RESIZE_SMOOTH;
+        resizeDeltaRef.current.dy = resizeDeltaRef.current.dy + (targetDy - resizeDeltaRef.current.dy) * RESIZE_SMOOTH;
+        const dxMm = resizeDeltaRef.current.dx;
+        const dyMm = resizeDeltaRef.current.dy;
+        setFreeItems(arr => arr.map(it => {
+          if (it.id !== resizingFreeIdGlobal) return it;
+          if (it.type==='text') {
+            return { ...it, wrapWidthMm: Math.max(20, (it.wrapWidthMm||60) + dxMm), fontMm: Math.max(2, (it.fontMm||4) + dyMm) };
+          }
+          if (it.type==='line') {
+            return { ...it, widthMm: Math.max(5, (it.widthMm||40) + dxMm), heightMm: Math.max(0.2, (it.heightMm||0.6) + dyMm/4) };
+          }
+          const maxW = Math.max(10, labelWidth - it.x - 1);
+          const maxH = Math.max(5, labelHeight - it.y - 1);
+          return { ...it, widthMm: Math.min(maxW, Math.max(10, (it.widthMm||40) + dxMm)), heightMm: Math.min(maxH, Math.max(5, (it.heightMm||12) + dyMm)) };
+        }));
+      }
+    };
+    const handleUp = () => { setDraggingAnchorKey(null); setDraggingFreeId(null); setResizingAnchorKeyGlobal(null); setResizingFreeIdGlobal(null); resizeDeltaRef.current = { dx:0, dy:0 }; };
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+    return () => { window.removeEventListener('mousemove', handleMove); window.removeEventListener('mouseup', handleUp); };
+  }, [draggingAnchorKey, draggingFreeId, resizingAnchorKeyGlobal, resizingFreeIdGlobal, resizeStart, dragOffset, zoom, snapToGrid, gridMm, labelWidth, labelHeight]);
+
   // Taslak yönetimi
   type TemplateRow = { id: string; name: string; data: any; thumbnail?: string };
   const [templates, setTemplates] = useState<TemplateRow[]>([]);
@@ -141,6 +289,62 @@ const LabelGenerator: React.FC = () => {
   const [baselineState, setBaselineState] = useState<any | null>(null);
   const [isDirty, setIsDirty] = useState<boolean>(false);
   const [showSaveDialog, setShowSaveDialog] = useState<boolean>(false);
+  const [deleteTemplateId, setDeleteTemplateId] = useState<string | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<AnchorKey | null>(null);
+  const [removeFreeId, setRemoveFreeId] = useState<string | null>(null);
+  // Sekmeler: standart vs serbest
+  const [activeTab, setActiveTab] = useState<'standart' | 'serbest'>('standart');
+
+  // Katman yardımcıları
+  const normalizeZ = (items: FreeItem[]): FreeItem[] => {
+    const sorted = [...items].sort((a,b)=> (a.zIndex||0) - (b.zIndex||0));
+    return sorted.map((it, idx) => ({ ...it, zIndex: idx }));
+  };
+  const getMaxZ = (items: FreeItem[]) => items.reduce((m, it)=> Math.max(m, it.zIndex ?? 0), -1);
+  const moveLayer = (id: string, direction: 'up' | 'down') => {
+    setFreeItems(items => {
+      if (items.length <= 1) return items;
+      const sorted = [...items].sort((a,b)=> (a.zIndex||0) - (b.zIndex||0)); // bottom -> top
+      const idx = sorted.findIndex(it => it.id === id);
+      if (idx === -1) return items;
+      if (direction === 'up' && idx < sorted.length - 1) {
+        const tmp = sorted[idx].zIndex ?? idx;
+        sorted[idx].zIndex = sorted[idx+1].zIndex ?? (idx+1);
+        sorted[idx+1].zIndex = tmp;
+      } else if (direction === 'down' && idx > 0) {
+        const tmp = sorted[idx].zIndex ?? idx;
+        sorted[idx].zIndex = sorted[idx-1].zIndex ?? (idx-1);
+        sorted[idx-1].zIndex = tmp;
+      } else {
+        return items;
+      }
+      return normalizeZ(sorted);
+    });
+  };
+  // Liste sürükle-bırak (katman sırası)
+  const reorderLayers = (dragId: string, dropId: string) => {
+    setFreeItems(items => {
+      if (dragId === dropId) return items;
+      const desc = [...items].sort((a,b)=> (b.zIndex||0)-(a.zIndex||0)); // top -> bottom
+      const from = desc.findIndex(i=>i.id===dragId);
+      const to = desc.findIndex(i=>i.id===dropId);
+      if (from<0 || to<0) return items;
+      const [moved] = desc.splice(from,1);
+      desc.splice(to,0,moved);
+      const n = desc.length;
+      const updated = desc.map((it, idx)=> ({ ...it, zIndex: n-1-idx })); // rebuild z (bottom=0)
+      return updated;
+    });
+  };
+  
+  // Serbest sekmesine geçildiğinde önizleme ve serbest düzenleme açık olsun
+  useEffect(() => {
+    if (activeTab === 'serbest') {
+      setFreeMode(true);
+      setEditMode(true);
+      setShowPreview(true);
+    }
+  }, [activeTab]);
 
   const serializeState = () => ({
     labelData,
@@ -153,6 +357,9 @@ const LabelGenerator: React.FC = () => {
     anchors,
     styles,
     selectedCompany,
+    visible,
+    freeMode,
+    freeItems,
   });
 
   const applySerializedState = (s: any) => {
@@ -167,19 +374,21 @@ const LabelGenerator: React.FC = () => {
     setAnchors(s.anchors ?? anchors);
     setStyles(s.styles ?? styles);
     if (s.selectedCompany) setSelectedCompany(s.selectedCompany);
+    if (s.visible) setVisible({ ...defaultVisibility, ...s.visible });
+    if (s.freeMode !== undefined) setFreeMode(!!s.freeMode);
+    if (s.freeItems) setFreeItems(s.freeItems as FreeItem[]);
   };
 
   const fetchTemplates = async () => {
-    // setLoadingTemplates(true);
     const { data, error } = await supabase
       .from('label_templates')
-      .select('id, name, data, thumbnail')
+      .select('id, name, data, thumbnail, is_free')
+      .eq('is_free', activeTab === 'serbest')
       .order('created_at', { ascending: false });
     if (!error && data) setTemplates(data as TemplateRow[]);
-    // setLoadingTemplates(false);
   };
 
-  useEffect(() => { fetchTemplates(); }, []);
+  useEffect(() => { fetchTemplates(); }, [activeTab]);
 
   const generateThumbnail = (): string | undefined => {
     const canvas = canvasRef.current;
@@ -189,7 +398,7 @@ const LabelGenerator: React.FC = () => {
 
   const saveTemplate = async () => {
     setSaving(true);
-    const payload = { name: templateName || 'Yeni Taslak', data: serializeState(), thumbnail: generateThumbnail() };
+    const payload = { name: templateName || 'Yeni Taslak', data: serializeState(), thumbnail: generateThumbnail(), is_free: activeTab === 'serbest' };
     const { error } = await supabase.from('label_templates').insert(payload);
     setSaving(false);
     if (!error) {
@@ -202,7 +411,7 @@ const LabelGenerator: React.FC = () => {
 
   const updateTemplate = async (id: string) => {
     setSaving(true);
-    const payload = { name: templateName || 'Taslak', data: serializeState(), thumbnail: generateThumbnail(), updated_at: new Date().toISOString() };
+    const payload = { name: templateName || 'Taslak', data: serializeState(), thumbnail: generateThumbnail(), updated_at: new Date().toISOString(), is_free: activeTab === 'serbest' };
     const { error } = await supabase.from('label_templates').update(payload).eq('id', id);
     setSaving(false);
     if (!error) {
@@ -210,6 +419,14 @@ const LabelGenerator: React.FC = () => {
       setIsDirty(false);
       fetchTemplates();
     }
+  };
+
+  const removeTemplate = async (id: string) => {
+    await supabase.from('label_templates').delete().eq('id', id);
+    if (currentTemplateId === id) {
+      setCurrentTemplateId(null);
+    }
+    await fetchTemplates();
   };
 
   const loadTemplate = async (id: string) => {
@@ -240,7 +457,7 @@ const LabelGenerator: React.FC = () => {
     const base = JSON.stringify(baselineState);
     setIsDirty(now !== base);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [labelData, labelType, labelWidth, labelHeight, dpi, darkness, zplDarkness, anchors, styles, selectedCompany]);
+  }, [labelData, labelType, labelWidth, labelHeight, dpi, darkness, zplDarkness, anchors, styles, selectedCompany, visible, freeMode, freeItems]);
 
   // ZPL'i görsel olarak render et (raster baskı için canvas, DPI'ya göre gerçek boyut)
   const renderZPLPreview = () => {
@@ -351,54 +568,116 @@ const LabelGenerator: React.FC = () => {
 
     switch (labelType) {
       case 'Koli etiketi':
-        // Başlık: logo varsa çiz, yoksa metin
-        {
-          const logoImg = logoImages[selectedCompany];
-          if (logoImg) {
-            const targetHeightPx = mmToPx(styles.title.font + 4);
-            const ratio = logoImg.width / logoImg.height;
-            const targetWidthPx = Math.min(mmToPx(styles.title.widthMm), Math.round(targetHeightPx * ratio));
-            ctx.drawImage(
-              logoImg,
-              mmToPx(anchors.title.x),
-              mmToPx(anchors.title.y),
-              targetWidthPx,
-              targetHeightPx
-            );
-          } else {
-            ctx.font = `bold ${mmToPx(styles.title.font)}px Arial`;
-            ctx.fillText('OLIVOS', mmToPx(anchors.title.x), mmToPx(anchors.title.y));
+        // Standart mod öğeleri sadece Standart sekmesinde çizilsin
+        if (activeTab === 'standart') {
+          // Başlık: logo varsa çiz, yoksa metin
+          if (visible.title) {
+            const logoImg = logoImages[selectedCompany];
+            if (logoImg) {
+              const targetHeightPx = mmToPx(styles.title.font + 4);
+              const ratio = logoImg.width / logoImg.height;
+              const targetWidthPx = Math.min(mmToPx(styles.title.widthMm), Math.round(targetHeightPx * ratio));
+              ctx.drawImage(
+                logoImg,
+                mmToPx(anchors.title.x),
+                mmToPx(anchors.title.y),
+                targetWidthPx,
+                targetHeightPx
+              );
+            } else {
+              ctx.font = `bold ${mmToPx(styles.title.font)}px Arial`;
+              ctx.fillText('OLIVOS', mmToPx(anchors.title.x), mmToPx(anchors.title.y));
+            }
+          }
+
+          // Ürün adı (sararak)
+          if (visible.productName) {
+            ctx.font = `${mmToPx(styles.productName.font)}px Arial`;
+            let y = mmToPx(anchors.productName.y);
+            const left = mmToPx(anchors.productName.x);
+            const maxW = mmToPx(Math.min(labelWidth - anchors.productName.x - 6, styles.productName.wrapWidth));
+            y = wrapText(labelData.productName, left, y, maxW, mmToPx(styles.details.lineGap));
+          }
+
+          // Diğer alanlar (daha küçük yazı)
+          if (visible.details) {
+            ctx.font = `${mmToPx(styles.details.font)}px Arial`;
+            let detX = mmToPx(anchors.details.x);
+            let detY = mmToPx(anchors.details.y);
+            const stepY = mmToPx(styles.details.lineGap);
+            const addLine = (text: string) => { ctx.fillText(text, detX, detY); detY += stepY; };
+            if (labelData.amount) addLine(`Miktar: ${labelData.amount}`);
+            if (labelData.serialNumber) addLine(`Seri: ${labelData.serialNumber}`);
+            if (labelData.batchNumber) addLine(`Parti: ${labelData.batchNumber}`);
+            if (labelData.invoiceNumber) addLine(`İrsaliye: ${labelData.invoiceNumber}`);
+            if (labelData.entryDate) addLine(`Giriş: ${labelData.entryDate}`);
+            if (labelData.expiryDate) addLine(`SKT: ${labelData.expiryDate}`);
+            if (labelData.supplier) addLine(`Tedarikçi: ${labelData.supplier}`);
+          }
+
+          // Barkod (EAN-13)
+          if (visible.barcode) {
+            const ean = toEAN13(labelData.barcode);
+            if (ean) {
+              const barWidthMm = Math.max(20, styles.barcode.widthMm);
+              const barLeft = mmToPx(anchors.barcode.x);
+              const barTop = mmToPx(anchors.barcode.y);
+              drawEAN13(ean, barLeft, barTop, barWidthMm, styles.barcode.height);
+            }
           }
         }
-
-        // Ürün adı (sararak)
-        ctx.font = `${mmToPx(styles.productName.font)}px Arial`;
-        let y = mmToPx(anchors.productName.y);
-        const left = mmToPx(anchors.productName.x);
-        const maxW = mmToPx(Math.min(labelWidth - anchors.productName.x - 6, styles.productName.wrapWidth));
-        y = wrapText(labelData.productName, left, y, maxW, mmToPx(styles.details.lineGap));
-
-        // Diğer alanlar (daha küçük yazı)
-        ctx.font = `${mmToPx(styles.details.font)}px Arial`;
-        let detX = mmToPx(anchors.details.x);
-        let detY = mmToPx(anchors.details.y);
-        const stepY = mmToPx(styles.details.lineGap);
-        const addLine = (text: string) => { ctx.fillText(text, detX, detY); detY += stepY; };
-        if (labelData.amount) addLine(`Miktar: ${labelData.amount}`);
-        if (labelData.serialNumber) addLine(`Seri: ${labelData.serialNumber}`);
-        if (labelData.batchNumber) addLine(`Parti: ${labelData.batchNumber}`);
-        if (labelData.invoiceNumber) addLine(`İrsaliye: ${labelData.invoiceNumber}`);
-        if (labelData.entryDate) addLine(`Giriş: ${labelData.entryDate}`);
-        if (labelData.expiryDate) addLine(`SKT: ${labelData.expiryDate}`);
-        if (labelData.supplier) addLine(`Tedarikçi: ${labelData.supplier}`);
-
-        // Barkod (EAN-13)
-        const ean = toEAN13(labelData.barcode);
-        if (ean) {
-          const barWidthMm = Math.max(20, styles.barcode.widthMm);
-          const barLeft = mmToPx(anchors.barcode.x);
-          const barTop = mmToPx(anchors.barcode.y);
-          drawEAN13(ean, barLeft, barTop, barWidthMm, styles.barcode.height);
+        
+        // Serbest mod çizimleri: sadece Serbest sekmesinde
+        if (activeTab==='serbest' && freeMode && freeItems.length > 0) {
+          // zIndex'e göre sırala ve çiz
+          const sorted = [...freeItems].sort((a,b)=> (a.zIndex||0) - (b.zIndex||0));
+          for (const item of sorted) {
+            if (item.type === 'text' && item.text) {
+              ctx.font = `${mmToPx(item.fontMm || 4)}px Arial`;
+              wrapText(item.text, mmToPx(item.x), mmToPx(item.y), mmToPx(item.wrapWidthMm || (labelWidth - item.x - 6)), mmToPx(4));
+            } else if (item.type === 'barcode' && item.text) {
+              const ean = toEAN13(item.text);
+              if (ean) {
+                const leftAdjMm = 3; // EAN-13 ilk rakam alanını kutu içinde tutmak için
+                const safeWidth = Math.max(10, (item.widthMm || 50) - leftAdjMm);
+                drawEAN13(ean, mmToPx(item.x + leftAdjMm), mmToPx(item.y), safeWidth, item.heightMm || 12);
+              }
+            } else if (item.type === 'image' && item.src) {
+              const key = item.src;
+              let img = freeImageCache.current[key];
+              if (!img) {
+                img = new Image();
+                (img as any).crossOrigin = 'anonymous';
+                img.src = key;
+                freeImageCache.current[key] = img;
+                img.onload = () => renderZPLPreview();
+              }
+              if (img.complete && (item.widthMm && item.heightMm)) {
+                ctx.drawImage(img, mmToPx(item.x), mmToPx(item.y), mmToPx(item.widthMm), mmToPx(item.heightMm));
+              }
+            } else if (item.type === 'line') {
+              const w = item.widthMm || 20; const h = item.heightMm || 0.5;
+              ctx.fillStyle = '#000';
+              ctx.fillRect(mmToPx(item.x), mmToPx(item.y), mmToPx(w), mmToPx(h));
+            } else if (item.type === 'circle') {
+              const w = item.widthMm || 10; const h = item.heightMm || 10;
+              const rx = mmToPx(w)/2; const ry = mmToPx(h)/2;
+              const cx = mmToPx(item.x) + rx; const cy = mmToPx(item.y) + ry;
+              ctx.beginPath();
+              ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI*2);
+              ctx.fillStyle = '#000';
+              ctx.fill();
+            } else if (item.type === 'ring') {
+              const w = item.widthMm || 12; const h = item.heightMm || 12;
+              const rx = mmToPx(w)/2; const ry = mmToPx(h)/2;
+              const cx = mmToPx(item.x) + rx; const cy = mmToPx(item.y) + ry;
+              ctx.beginPath();
+              ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI*2);
+              ctx.lineWidth = Math.max(1, Math.floor(mmToPx(0.6)));
+              ctx.strokeStyle = '#000';
+              ctx.stroke();
+            }
+          }
         }
         break;
         
@@ -463,12 +742,11 @@ const LabelGenerator: React.FC = () => {
     }
   };
 
-  // Canvas'ı güncelle
+  // Canvas ve ZPL'i sürekli güncelle
   useEffect(() => {
-    if (showPreview) {
-      renderZPLPreview();
-    }
-  }, [labelData, labelType, labelWidth, labelHeight, showPreview, darkness, anchors, styles]);
+    renderZPLPreview();
+    try { generateZPL(); } catch {}
+  }, [labelData, labelType, labelWidth, labelHeight, showPreview, darkness, anchors, styles, visible, freeMode, freeItems, dpi, zplDarkness]);
 
   const generateZPL = () => {
     let zpl = '';
@@ -623,298 +901,170 @@ const LabelGenerator: React.FC = () => {
         </div>
       </div>
 
+      {/* Sekmeler */}
+      <div className="mb-4 flex items-center gap-2">
+        <button
+          className={`px-3 py-1.5 text-sm rounded-md border ${activeTab==='standart' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-700 border-gray-300'}`}
+          onClick={()=>setActiveTab('standart')}
+        >Standart Etiket</button>
+        <button
+          className={`px-3 py-1.5 text-sm rounded-md border ${activeTab==='serbest' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-700 border-gray-300'}`}
+          onClick={()=>setActiveTab('serbest')}
+        >Serbest Etiket</button>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Form */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-6">
-          <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Etiket Bilgileri</h3>
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                value={templateName}
-                onChange={(e)=>setTemplateName(e.target.value)}
-                placeholder="Taslak adı"
-                className="w-44 p-2 text-sm border border-gray-300 rounded"
-              />
-              <button onClick={()=>setShowSaveDialog(true)} disabled={saving || !isDirty && !currentTemplateId} className={`px-3 py-1.5 text-sm text-white rounded ${currentTemplateId ? 'bg-emerald-600' : 'bg-indigo-600'} disabled:opacity-50`}>{currentTemplateId ? 'Güncelle' : 'Kaydet'}</button>
-              <button
-                type="button"
-                className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded"
-                onClick={() => {
-                  // mevcut durumdan yeni şablon oluştur
-                  setCurrentTemplateId(null);
-                  setTemplateName((n)=> (n ? `${n} (Kopya)` : 'Yeni Taslak'));
-                  setShowSaveDialog(true);
-                }}
-              >Yeni Kaydet</button>
-              <button type="button" onClick={()=>setShowTemplateModal(true)} className="px-3 py-1.5 text-sm bg-gray-700 text-white rounded">Şablonlar</button>
-            </div>
-          </div>
+        {activeTab==='standart' && (
+          <StandardForm
+            labelType={labelType}
+            setLabelType={setLabelType}
+            labelData={labelData}
+            setLabelData={setLabelData}
+            templateName={templateName}
+            setTemplateName={setTemplateName}
+            saving={saving}
+            isDirty={isDirty}
+            currentTemplateId={currentTemplateId}
+            setShowSaveDialog={setShowSaveDialog}
+            setCurrentTemplateId={setCurrentTemplateId}
+            setShowTemplateModal={setShowTemplateModal}
+            companyLogos={companyLogos}
+            logoImages={logoImages}
+            selectedCompany={selectedCompany}
+            setSelectedCompany={setSelectedCompany}
+            labelWidth={labelWidth}
+            setLabelWidth={setLabelWidth}
+            labelHeight={labelHeight}
+            setLabelHeight={setLabelHeight}
+            dpi={dpi}
+            setDpi={setDpi}
+            darkness={darkness}
+            setDarkness={setDarkness}
+            zplDarkness={zplDarkness}
+            setZplDarkness={setZplDarkness}
+            showAdvancedSettings={showAdvancedSettings}
+            setShowAdvancedSettings={setShowAdvancedSettings}
+            styles={styles}
+            setStyles={setStyles}
+            validateEan13={normalizeEan13}
+          />
+        )}
 
-          {/* Etiket Türü Seçimi */}
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Etiket Türü</label>
-            <select
-              value={labelType}
-              onChange={e => setLabelType(e.target.value)}
-              className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            >
-              <option value="Koli etiketi">Koli etiketi</option>
-              <option value="Numune Etiketi">Numune Etiketi</option>
-              <option value="Yarı Mamül Etiketi">Yarı Mamül Etiketi</option>
-            </select>
-          </div>
-
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Ürün Adı</label>
-              <input
-                type="text"
-                value={labelData.productName}
-                onChange={(e) => setLabelData({...labelData, productName: e.target.value})}
-                className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                placeholder="Örn: Zeytinyağlı Kastil Sabunu"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Barkod (EAN-13)</label>
-              <input
-                type="text"
-                value={labelData.barcode || ''}
-                onChange={(e) => setLabelData({ ...labelData, barcode: e.target.value })}
-                className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                placeholder="5901234123457"
-              />
-              <p className="text-xs text-gray-500 mt-1">12 haneli girerseniz son haneyi otomatik hesaplarız</p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
+        {activeTab==='serbest' && (
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-4">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">Serbest Etiket Araçları</h3>
+            <div className="space-y-4" onKeyDown={(e)=>{
+              if (e.key === 'Delete' && selectedFreeId) {
+                setFreeItems(items => items.filter(i => i.id !== selectedFreeId));
+                setSelectedFreeId(null);
+              }
+            }} tabIndex={0}>
+              {/* Şablon Kaydet/Güncelle */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Seri No</label>
-                <input
-                  type="text"
-                  value={labelData.serialNumber}
-                  onChange={(e) => setLabelData({...labelData, serialNumber: e.target.value})}
-                  className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="ZKS-2024-001"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Parti No</label>
-                <input
-                  type="text"
-                  value={labelData.batchNumber}
-                  onChange={(e) => setLabelData({...labelData, batchNumber: e.target.value})}
-                  className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="BATCH-001"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Giriş Tarihi</label>
-                <input
-                  type="date"
-                  value={labelData.entryDate}
-                  onChange={(e) => setLabelData({...labelData, entryDate: e.target.value})}
-                  className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Son Kullanma Tarihi</label>
-                <input
-                  type="date"
-                  value={labelData.expiryDate}
-                  onChange={(e) => setLabelData({...labelData, expiryDate: e.target.value})}
-                  className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Miktar</label>
-              <input
-                type="text"
-                value={labelData.amount}
-                onChange={(e) => setLabelData({...labelData, amount: e.target.value})}
-                className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                placeholder="500 g"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">İrsaliye No</label>
-              <input
-                type="text"
-                value={labelData.invoiceNumber}
-                onChange={(e) => setLabelData({...labelData, invoiceNumber: e.target.value})}
-                className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                placeholder="INV-2024-001"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Tedarikçi</label>
-              <input
-                type="text"
-                value={labelData.supplier}
-                onChange={(e) => setLabelData({...labelData, supplier: e.target.value})}
-                className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                placeholder="Akdeniz Gıda"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Şirket Logosu</label>
-              <div className="flex items-center gap-2 flex-wrap">
-                {companyLogos.map((l) => (
+                <div className="text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">Şablon</div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <input
+                    type="text"
+                    value={templateName}
+                    onChange={(e)=>setTemplateName(e.target.value)}
+                    placeholder="Şablon adı"
+                    className="w-44 p-2 text-sm border border-gray-300 rounded"
+                  />
                   <button
-                    key={l.company_name}
+                    onClick={()=>{ setShowPreview(true); setShowSaveDialog(true); }}
+                    disabled={saving || (!isDirty && !currentTemplateId)}
+                    className={`px-3 py-1.5 text-sm text-white rounded ${currentTemplateId ? 'bg-emerald-600' : 'bg-indigo-600'} disabled:opacity-50`}
+                  >{currentTemplateId ? 'Güncelle' : 'Kaydet'}</button>
+                  <button
                     type="button"
-                    onClick={() => setSelectedCompany(l.company_name)}
-                    className={`px-3 py-2 rounded border ${selectedCompany===l.company_name ? 'border-blue-500 text-blue-600' : 'border-gray-300 text-gray-700'} bg-white hover:bg-gray-50`}
-                    title={l.company_name}
-                  >
-                    {logoImages[l.company_name] ? (
-                      <img src={l.logo_url} alt={l.company_name} className="h-6 object-contain" />
-                    ) : (
-                      <span className="text-sm">{l.company_name}</span>
-                    )}
+                    className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded"
+                    onClick={() => {
+                      setCurrentTemplateId(null);
+                      setTemplateName(n => (n ? `${n} (Kopya)` : 'Yeni Taslak'));
+                      setShowPreview(true);
+                      setShowSaveDialog(true);
+                    }}
+                  >Yeni Kaydet</button>
+                  <button type="button" onClick={()=>setShowTemplateModal(true)} className="px-3 py-1.5 text-sm bg-gray-700 text-white rounded">Şablonlar</button>
+                </div>
+              </div>
+              {/* Öğe ekleme */}
+              <div>
+                <div className="text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">Öğe Ekle</div>
+                <div className="grid grid-cols-3 gap-2">
+                  <button type="button" className="flex items-center justify-center gap-2 px-2 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>{ setFreeEditContext('preview'); setEditingFreeId(null); setFreeDraft({ type:'text', text:'Yeni Metin', fontMm:4, wrapWidthMm:60, x:6, y:6 }); setShowFreeDialog(true); }}>
+                    <Type className="w-4 h-4" />
+                    <span className="text-sm">Metin</span>
                   </button>
-                ))}
-                {companyLogos.length===0 && (
-                  <span className="text-sm text-gray-500">Supabase'de 'company_logo' tablosunda kayıt bulunamadı.</span>
-                )}
-              </div>
-            </div>
-
-            {/* Gelişmiş Ayarlar Toggle */}
-            <div className="border-t pt-4">
-              <button
-                onClick={() => setShowAdvancedSettings(!showAdvancedSettings)}
-                className="flex items-center gap-2 text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white font-medium mb-3"
-              >
-                <svg
-                  className={`w-4 h-4 transition-transform ${showAdvancedSettings ? 'rotate-90' : ''}`}
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                </svg>
-                Gelişmiş Ayarları Göster
-              </button>
-              
-              {/* Etiket Boyutu Ayarları - Collapsible */}
-              {showAdvancedSettings && (
-                <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Genişlik (mm)</label>
-                  <input
-                    type="number"
-                    value={labelWidth}
-                    onChange={(e) => setLabelWidth(Number(e.target.value))}
-                    className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    min="20"
-                    max="200"
-                    step="0.1"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Yükseklik (mm)</label>
-                  <input
-                    type="number"
-                    value={labelHeight}
-                    onChange={(e) => setLabelHeight(Number(e.target.value))}
-                    className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    min="10"
-                    max="100"
-                    step="0.1"
-                  />
+                  <button type="button" className="flex items-center justify-center gap-2 px-2 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>{ setFreeEditContext('preview'); setEditingFreeId(null); setFreeDraft({ type:'barcode', text:'5901234123457', widthMm:60, heightMm:12, x:6, y:20 }); setShowFreeDialog(true); }}>
+                    <BarcodeIcon className="w-4 h-4" />
+                    <span className="text-sm">Barkod</span>
+                  </button>
+                  <>
+                    <input ref={imageInputRef} type="file" accept="image/*" className="hidden" onChange={(e)=>{ const f=e.target.files?.[0]; if(!f) return; const r=new FileReader(); r.onload=()=>{ setFreeEditContext('preview'); setEditingFreeId(null); setFreeDraft({ type:'image', src:String(r.result), widthMm:30, heightMm:12, x:6, y:10 }); setShowFreeDialog(true); }; r.readAsDataURL(f); e.currentTarget.value=''; }} />
+                    <button type="button" className="flex items-center justify-center gap-2 px-2 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>imageInputRef.current?.click()}>
+                      <ImageIcon className="w-4 h-4" />
+                      <span className="text-sm">Görsel</span>
+                    </button>
+                  </>
+                  <button type="button" className="flex items-center justify-center gap-2 px-2 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>{ setFreeEditContext('preview'); setEditingFreeId(null); setFreeDraft({ type:'line', widthMm:40, heightMm:0.6, x:6, y:30 }); setShowFreeDialog(true); }}>
+                    <div className="w-5 h-5 border-t-2 border-gray-700" />
+                    <span className="text-sm">Çizgi</span>
+                  </button>
+                  <button type="button" className="flex items-center justify-center gap-2 px-2 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>{ setFreeEditContext('preview'); setEditingFreeId(null); setFreeDraft({ type:'circle', widthMm:12, heightMm:12, x:6, y:36 }); setShowFreeDialog(true); }}>
+                    <div className="w-4 h-4 rounded-full bg-gray-700" />
+                    <span className="text-sm">Daire</span>
+                  </button>
+                  <button type="button" className="flex items-center justify-center gap-2 px-2 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>{ setFreeEditContext('preview'); setEditingFreeId(null); setFreeDraft({ type:'ring', widthMm:12, heightMm:12, x:20, y:36 }); setShowFreeDialog(true); }}>
+                    <div className="w-4 h-4 rounded-full border-2 border-gray-700" />
+                    <span className="text-sm">Çember</span>
+                  </button>
                 </div>
               </div>
-            {/* Görsel/ZPL koyuluk ayarları */}
-            <div className="grid grid-cols-2 gap-4 mt-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">DPI (ZPL için)</label>
-                <select
-                  value={dpi}
-                  onChange={(e) => setDpi(Number(e.target.value) as 203 | 300 | 600)}
-                  className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                >
-                  <option value={203}>203 dpi</option>
-                  <option value={300}>300 dpi</option>
-                  <option value={600}>600 dpi</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Koyuluk (Önizleme)</label>
-                <input
-                  type="range"
-                  min={0.6}
-                  max={2}
-                  step={0.05}
-                  value={darkness}
-                  onChange={(e) => setDarkness(Number(e.target.value))}
-                  className="w-full"
-                />
-                <div className="text-xs text-gray-500 mt-1">{Math.round(darkness * 100)}%</div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">ZPL Darkness (^MD 0-30)</label>
-                <input
-                  type="number"
-                  min={0}
-                  max={30}
-                  value={zplDarkness}
-                  onChange={(e) => setZplDarkness(Math.max(0, Math.min(30, Number(e.target.value))))}
-                  className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-                <p className="text-xs text-gray-500 mt-1">Düşük = açık, yüksek = daha koyu baskı</p>
-              </div>
-            </div>
 
-            {/* Bireysel boyut ayarları (mm) */}
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mt-4">
+              {/* Yakınlaştırma ve Izgara */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Başlık Font (mm)</label>
-                <input type="number" step={0.1} value={styles.title.font} onChange={(e)=>setStyles({...styles, title:{...styles.title, font:Number(e.target.value)}})} className="w-full p-2 border border-gray-300 rounded" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Ürün Font (mm)</label>
-                <input type="number" step={0.1} value={styles.productName.font} onChange={(e)=>setStyles({...styles, productName:{...styles.productName, font:Number(e.target.value)}})} className="w-full p-2 border border-gray-300 rounded" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Ürün Sarma Genişliği (mm)</label>
-                <input type="number" step={0.1} value={styles.productName.wrapWidth} onChange={(e)=>setStyles({...styles, productName:{...styles.productName, wrapWidth:Number(e.target.value)}})} className="w-full p-2 border border-gray-300 rounded" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Detay Font (mm)</label>
-                <input type="number" step={0.1} value={styles.details.font} onChange={(e)=>setStyles({...styles, details:{...styles.details, font:Number(e.target.value)}})} className="w-full p-2 border border-gray-300 rounded" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Satır Aralığı (mm)</label>
-                <input type="number" step={0.1} value={styles.details.lineGap} onChange={(e)=>setStyles({...styles, details:{...styles.details, lineGap:Number(e.target.value)}})} className="w-full p-2 border border-gray-300 rounded" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Barkod Yükseklik (mm)</label>
-                <input type="number" step={0.1} value={styles.barcode.height} onChange={(e)=>setStyles({...styles, barcode:{...styles.barcode, height:Number(e.target.value)}})} className="w-full p-2 border border-gray-300 rounded" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Barkod Genişliği (mm)</label>
-                <input type="number" step={0.1} min={20} value={styles.barcode.widthMm} onChange={(e)=>setStyles({...styles, barcode:{...styles.barcode, widthMm:Number(e.target.value)}})} className="w-full p-2 border border-gray-300 rounded" />
-              </div>
-            </div>
+                <div className="text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">Yakınlaştır</div>
+                <div className="flex items-center gap-2 mb-2">
+                  <button type="button" className="px-2 py-1 rounded border" onClick={()=>setZoom(z=>Math.max(0.5, Number((z-0.1).toFixed(2))))}><ZoomOut className="w-4 h-4"/></button>
+                  <input type="range" min={0.5} max={3} step={0.1} value={zoom} onChange={(e)=>setZoom(Number(e.target.value))} className="flex-1" />
+                  <button type="button" className="px-2 py-1 rounded border" onClick={()=>setZoom(z=>Math.min(3, Number((z+0.1).toFixed(2))))}><ZoomIn className="w-4 h-4"/></button>
+                  <span className="w-10 text-right text-sm">{Math.round(zoom*100)}%</span>
                 </div>
-              )}
-          </div>
+                <div className="flex items-center gap-3 text-sm">
+                  <label className="inline-flex items-center gap-2">
+                    <input type="checkbox" checked={showGrid} onChange={(e)=>setShowGrid(e.target.checked)} /> Izgarayı Göster
+                  </label>
+                  <label className="inline-flex items-center gap-2">
+                    <input type="checkbox" checked={snapToGrid} onChange={(e)=>setSnapToGrid(e.target.checked)} /> Izgaraya Yapıştır (Snap)
+                  </label>
+                  <label className="inline-flex items-center gap-2">
+                    <span>Izgara (mm)</span>
+                    <input type="number" min={1} step={0.5} value={gridMm} onChange={(e)=>setGridMm(Math.max(0.5, Number(e.target.value)))} className="w-16 p-1 border rounded" />
+                  </label>
+                </div>
+              </div>
 
-                     {/* Butonlar önizleme bölümüne taşındı */}
+              {/* Öğeler listesi ve katman kontrolü (modüler) */}
+              <FreeItemsPanel
+                items={freeItems}
+                selectedId={selectedFreeId}
+                onSelect={(id)=>setSelectedFreeId(id)}
+                onMoveLayer={moveLayer}
+                onReorder={reorderLayers}
+                onClear={()=>setFreeItems([])}
+              />
+
+              {/* Aksiyonlar */}
+              <div className="grid grid-cols-1 gap-2 pt-2 border-t">
+                <button onClick={generateZPL} className="flex items-center justify-center gap-2 px-3 py-1.5 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700"><QrCode className="w-4 h-4"/>ZPL Oluştur</button>
+                <button onClick={downloadZPL} disabled={!zplCode} className="flex items-center justify-center gap-2 px-3 py-1.5 bg-gray-700 text-white text-sm rounded-md hover:bg-gray-800 disabled:bg-gray-300 disabled:cursor-not-allowed"><Download className="w-4 h-4"/>ZPL İndir</button>
+                <button onClick={printLabel} disabled={!zplCode} className="flex items-center justify-center gap-2 px-3 py-1.5 bg-green-600 text-white text-sm rounded-md hover:bg-green-700 disabled:bg-green-300 disabled:cursor-not-allowed"><Printer className="w-4 h-4"/>Yazdır</button>
+              </div>
             </div>
           </div>
+        )}
 
         {/* Preview */}
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow p-5 border border-gray-100 dark:border-gray-700">
@@ -922,14 +1072,17 @@ const LabelGenerator: React.FC = () => {
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Etiket Önizleme</h3>
             
             {/* Action Buttons */}
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap items-center justify-end">
+            {/* Düzenleme Modu */}
             <button
-              onClick={generateZPL}
-                className="flex items-center justify-center px-3 py-1.5 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700"
-            >
-                <QrCode className="w-4 h-4 mr-1" />
-                ZPL Oluştur
-            </button>
+                type="button"
+                onClick={() => setEditMode(v=>!v)}
+                className={`px-3 py-1.5 text-sm rounded-md border ${editMode ? 'bg-amber-100 border-amber-300 text-amber-800' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'}`}
+              >{editMode ? 'Düzenleme Açık' : 'Düzenleme Modu'}</button>
+            {/* Konumları Sıfırla kaldırıldı */}
+            {/* Serbest Mod Penceresi kaldırıldı */}
+
+            {/* ZPL Oluştur butonu kaldırıldı - ZPL sürekli güncelleniyor */}
             
               <button
                 onClick={downloadZPL}
@@ -948,135 +1101,50 @@ const LabelGenerator: React.FC = () => {
                 <Printer className="w-4 h-4 mr-1" />
                 Yazdır
               </button>
+            </div>
           </div>
-        </div>
 
         {/* Canvas Preview + Drag Anchors */}
-          {showPreview && (
-            <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-4 mb-4">
-            <div className="w-full max-w-md mx-auto bg-white dark:bg-gray-800 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-md p-4 relative">
-                <canvas
-                  ref={canvasRef}
-                  className="w-full h-auto border border-gray-300"
-                  style={{ 
-                  width: `${labelWidth * 3.78 * zoom}px`, 
-                  height: `${labelHeight * 3.78 * zoom}px`,
-                    maxWidth: '100%'
-                  }}
-                />
-              {editMode && (
-                <div ref={overlayRef} className="absolute inset-4 pointer-events-none select-none">
-                  {(['title','productName','details','barcode'] as const).map((key) => (
-                    <div
-                      key={key}
-                      className="absolute bg-blue-500/10 border border-blue-500 text-[10px] text-blue-800 rounded pointer-events-auto"
-                      style={{
-                        left: `${anchors[key].x * 3.78 * zoom}px`,
-                        top: `${anchors[key].y * 3.78 * zoom}px`,
-                        width: (()=>{
-                          const base = 3.78 * zoom;
-                          if (key==='productName') return `${styles.productName.wrapWidth * base}px`;
-                          if (key==='barcode') return `${styles.barcode.widthMm * base}px`;
-                          if (key==='details') return `${styles.details.widthMm * base}px`;
-                          return `${styles.title.widthMm * base}px`;
-                        })(),
-                        height: (()=>{
-                          const base = 3.78 * zoom;
-                          if (key==='title') return `${(styles.title.font + 2) * base}px`;
-                          if (key==='productName') return `${(styles.productName.font * 2 + styles.details.lineGap) * base}px`;
-                          if (key==='details') return `${(styles.details.lineGap * 6) * base}px`;
-                          return `${(styles.barcode.height + 8) * base}px`;
-                        })(),
-                        cursor: 'move'
-                      }}
-                      onMouseDown={(e) => {
-                        setDragKey(key);
-                        const rect = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
-                        setDragOffset({ dx: e.clientX - (rect.left + anchors[key].x * 3.78 * zoom), dy: e.clientY - (rect.top + anchors[key].y * 3.78 * zoom) });
-                      }}
-                      onMouseMove={(e) => {
-                        if (dragKey !== key) return;
-                        const parent = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
-                        const x = (e.clientX - parent.left - dragOffset.dx) / (3.78 * zoom);
-                        const y = (e.clientY - parent.top - dragOffset.dy) / (3.78 * zoom);
-                        setAnchors((prev) => ({ ...prev, [key]: { x: Math.max(0, Math.min(labelWidth-5, x)), y: Math.max(0, Math.min(labelHeight-5, y)) } }));
-                      }}
-                      onMouseUp={() => setDragKey(null)}
-                      onMouseLeave={() => setDragKey(null)}
-                    >
-                      <div className="absolute left-1 top-1 text-[10px] px-1 py-0.5 bg-white/60 rounded">{key}</div>
-                      {/* Resize handle (sağ-alt) */}
-                      <div
-                        className="absolute right-0 bottom-0 w-3 h-3 bg-blue-600 cursor-se-resize"
-                        onMouseDown={(e) => {
-                          e.stopPropagation();
-                          setResizingKey(key);
-                          const parent = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
-                          setResizeStart({
-                            x0: e.clientX,
-                            y0: e.clientY,
-                            wMm: parseFloat(((parent.width)/(3.78*zoom)).toFixed(2)),
-                            hMm: parseFloat(((parent.height)/(3.78*zoom)).toFixed(2)),
-                            productFont: styles.productName.font,
-                            productWrap: styles.productName.wrapWidth,
-                            titleFont: styles.title.font,
-                            detailsGap: styles.details.lineGap,
-                            detailsFont: styles.details.font,
-                            bcHeight: styles.barcode.height,
-                            bcScale: 1
-                          });
-                        }}
-                        onMouseMove={(e) => {
-                          if (resizingKey !== key) return;
-                          const dxMm = (e.clientX - resizeStart.x0) / (3.78*zoom);
-                          const dyMm = (e.clientY - resizeStart.y0) / (3.78*zoom);
-                          if (key==='productName') {
-                            const newWrap = Math.max(20, resizeStart.productWrap + dxMm);
-                            const newFont = Math.max(2, resizeStart.productFont + dyMm);
-                            setStyles(s=>({...s, productName:{...s.productName, wrapWidth:newWrap, font:newFont}}));
-                          } else if (key==='title') {
-                            const newFont = Math.max(2, resizeStart.titleFont + dyMm);
-                            const newW = Math.max(10, resizeStart.wMm + dxMm);
-                            setStyles(s=>({...s, title:{...s.title, font:newFont, widthMm:newW}}));
-                          } else if (key==='details') {
-                            const newGap = Math.max(2, resizeStart.detailsGap + dyMm/2);
-                            const newFont = Math.max(2, resizeStart.detailsFont + dyMm/2);
-                            const newW = Math.max(20, resizeStart.wMm + dxMm);
-                            setStyles(s=>({...s, details:{...s.details, lineGap:newGap, font:newFont, widthMm:newW}}));
-                          } else if (key==='barcode') {
-                            const newW = Math.max(20, resizeStart.wMm + dxMm);
-                            const newH = Math.max(5, resizeStart.bcHeight + dyMm);
-                            setStyles(s=>({...s, barcode:{...s.barcode, widthMm:newW, height:newH}}));
-                          }
-                        }}
-                        onMouseUp={() => setResizingKey(null)}
-                        onMouseLeave={() => setResizingKey(null)}
-                      />
-                    </div>
-                  ))}
-                </div>
-              )}
+          <PreviewCanvas
+            canvasRef={canvasRef}
+            overlayRef={overlayRef}
+            labelWidth={labelWidth}
+            labelHeight={labelHeight}
+            zoom={zoom}
+            showGrid={showGrid}
+            gridMm={gridMm}
+            showPreview={showPreview}
+            activeTab={activeTab}
+            editMode={editMode}
+            visible={visible}
+            anchors={anchors}
+            styles={styles}
+            freeItems={freeItems}
+            selectedFreeId={selectedFreeId}
+            setDragKey={setDragKey}
+            setDraggingAnchorKey={setDraggingAnchorKey}
+            setDragOffset={setDragOffset}
+            setResizingKey={setResizingKey}
+            setResizingAnchorKeyGlobal={setResizingAnchorKeyGlobal}
+            setResizeStart={setResizeStart}
+            setDraggingFreeId={setDraggingFreeId}
+            setSelectedFreeId={setSelectedFreeId}
+            setEditingFreeId={setEditingFreeId}
+            setFreeDraft={setFreeDraft}
+            setShowFreeDialog={setShowFreeDialog}
+            setRemoveTarget={setRemoveTarget}
+            setRemoveFreeId={setRemoveFreeId}
+            setResizingFreeIdGlobal={setResizingFreeIdGlobal}
+          />
+          <div className="flex items-center justify-between mt-2 gap-3 flex-wrap">
+            <div className="flex items-center gap-2 text-sm">
+              <span>Yakınlaştır:</span>
+              <button type="button" className="px-2 py-1 bg-gray-200 rounded hover:bg-gray-300" onClick={()=>setZoom(z=>Math.max(0.5, Number((z-0.1).toFixed(2))))}>-</button>
+              <input type="range" min={0.5} max={3} step={0.1} value={zoom} onChange={(e)=>setZoom(Number(e.target.value))} />
+              <button type="button" className="px-2 py-1 bg-gray-200 rounded hover:bg-gray-300" onClick={()=>setZoom(z=>Math.min(3, Number((z+0.1).toFixed(2))))}>+</button>
+              <span className="w-10 text-right">{Math.round(zoom*100)}%</span>
             </div>
-            <div className="flex items-center justify-between mt-2 gap-3 flex-wrap">
-              <label className="inline-flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={editMode} onChange={(e)=>setEditMode(e.target.checked)} />
-                Düzenleme modu (Konumları sürükle-bırak)
-              </label>
-              <div className="flex items-center gap-2 text-sm">
-                <span>Yakınlaştır:</span>
-                <button type="button" className="px-2 py-1 bg-gray-200 rounded hover:bg-gray-300" onClick={()=>setZoom(z=>Math.max(0.5, Number((z-0.1).toFixed(2))))}>-</button>
-                <input type="range" min={0.5} max={3} step={0.1} value={zoom} onChange={(e)=>setZoom(Number(e.target.value))} />
-                <button type="button" className="px-2 py-1 bg-gray-200 rounded hover:bg-gray-300" onClick={()=>setZoom(z=>Math.min(3, Number((z+0.1).toFixed(2))))}>+</button>
-                <span className="w-10 text-right">{Math.round(zoom*100)}%</span>
-              </div>
-              <button
-                type="button"
-                className="text-xs px-2 py-1 bg-gray-200 rounded hover:bg-gray-300"
-                onClick={() => setAnchors(defaultAnchors)}
-              >Konumları Sıfırla</button>
-              </div>
-            </div>
-          )}
+          </div>
 
           {/* ZPL Code Display */}
           {zplCode && (
@@ -1091,7 +1159,7 @@ const LabelGenerator: React.FC = () => {
           )}
 
           {/* Talimatlar kaldırıldı – arayüzü sadeleştirmek için */}
-        </div>
+          </div>
 
         {/* Şablon Modalı */}
         {showTemplateModal && (
@@ -1101,14 +1169,22 @@ const LabelGenerator: React.FC = () => {
               <div className="flex items-center justify-between mb-3">
                 <h4 className="text-lg font-semibold">Şablonlar</h4>
                 <button className="text-sm px-2 py-1 rounded bg-gray-200 dark:bg-gray-700" onClick={()=>setShowTemplateModal(false)}>Kapat</button>
-              </div>
+        </div>
               <div className="mb-3 flex items-center gap-2">
                 <input value={templateSearch} onChange={(e)=>setTemplateSearch(e.target.value)} placeholder="Ara..." className="flex-1 p-2 border rounded" />
                 <button onClick={fetchTemplates} className="px-3 py-1.5 text-sm bg-gray-700 text-white rounded">Yenile</button>
               </div>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-3 max-h-[60vh] overflow-auto">
                 {templates.filter(t=> t.name.toLowerCase().includes(templateSearch.toLowerCase())).map(t => (
-                  <div key={t.id} className="border rounded-md p-2 hover:shadow cursor-pointer" onClick={()=>{loadTemplate(t.id); setShowTemplateModal(false);}}>
+                  <div key={t.id} className="relative border rounded-md p-2 hover:shadow cursor-pointer group" onClick={()=>{loadTemplate(t.id); setShowTemplateModal(false);}}>
+                    <button
+                      className="absolute right-1 top-1 p-1 rounded bg-red-600 text-white opacity-0 group-hover:opacity-100"
+                      onClick={(e)=>{ e.stopPropagation(); setDeleteTemplateId(t.id); }}
+                      title="Şablonu sil"
+                      aria-label="Sil"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
                     {t.thumbnail ? (
                       <img src={t.thumbnail} alt={t.name} className="w-full h-28 object-contain bg-gray-50 rounded" />
                     ) : (
@@ -1125,6 +1201,266 @@ const LabelGenerator: React.FC = () => {
           </div>
         )}
 
+        {/* Serbest Mod Dialog */}
+        {showFreeDialog && freeDraft && (
+          <div className="fixed inset-0 z-[103] flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/40" onClick={()=>setShowFreeDialog(false)} />
+            <div className="relative bg-white dark:bg-gray-800 w-full max-w-md rounded-lg shadow-lg p-4">
+              <h4 className="text-lg font-semibold mb-3">{editingFreeId ? 'Öğeyi Düzenle' : 'Yeni Öğeyi Ekle'}</h4>
+              <div className="space-y-3">
+                <div className="text-sm">Tip: <span className="font-medium capitalize">{freeDraft.type}</span></div>
+                {(freeDraft.type === 'text') && (
+                  <>
+                    <label className="block text-sm font-medium mb-1">Metin</label>
+                    <textarea className="w-full p-2 border rounded" rows={3} value={freeDraft.text || ''} onChange={(e)=>setFreeDraft({...freeDraft, text:e.target.value})} />
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-sm mb-1">Font (mm)</label>
+                        <input type="number" step={0.1} className="w-full p-2 border rounded" value={freeDraft.fontMm || 4} onChange={(e)=>setFreeDraft({...freeDraft, fontMm:Number(e.target.value)})} />
+                      </div>
+                      <div>
+                        <label className="block text-sm mb-1">Sarma Genişliği (mm)</label>
+                        <input type="number" step={0.1} className="w-full p-2 border rounded" value={freeDraft.wrapWidthMm || 60} onChange={(e)=>setFreeDraft({...freeDraft, wrapWidthMm:Number(e.target.value)})} />
+                      </div>
+                    </div>
+                  </>
+                )}
+                {(freeDraft.type === 'line') && (
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-sm mb-1">Genişlik (mm)</label>
+                        <input type="number" step={0.1} className="w-full p-2 border rounded" value={freeDraft.widthMm || 40} onChange={(e)=>setFreeDraft({...freeDraft, widthMm:Number(e.target.value)})} />
+                      </div>
+                      <div>
+                        <label className="block text-sm mb-1">Kalınlık (mm)</label>
+                        <input type="number" step={0.1} className="w-full p-2 border rounded" value={freeDraft.heightMm || 0.6} onChange={(e)=>setFreeDraft({...freeDraft, heightMm:Number(e.target.value)})} />
+                      </div>
+                    </div>
+                  </>
+                )}
+                {(freeDraft.type === 'circle') && (
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-sm mb-1">Genişlik (mm)</label>
+                        <input type="number" step={0.1} className="w-full p-2 border rounded" value={freeDraft.widthMm || 12} onChange={(e)=>setFreeDraft({...freeDraft, widthMm:Number(e.target.value)})} />
+                      </div>
+                      <div>
+                        <label className="block text-sm mb-1">Yükseklik (mm)</label>
+                        <input type="number" step={0.1} className="w-full p-2 border rounded" value={freeDraft.heightMm || 12} onChange={(e)=>setFreeDraft({...freeDraft, heightMm:Number(e.target.value)})} />
+                      </div>
+                    </div>
+                  </>
+                )}
+                {(freeDraft.type === 'ring') && (
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-sm mb-1">Genişlik (mm)</label>
+                        <input type="number" step={0.1} className="w-full p-2 border rounded" value={freeDraft.widthMm || 12} onChange={(e)=>setFreeDraft({...freeDraft, widthMm:Number(e.target.value)})} />
+                      </div>
+                      <div>
+                        <label className="block text-sm mb-1">Yükseklik (mm)</label>
+                        <input type="number" step={0.1} className="w-full p-2 border rounded" value={freeDraft.heightMm || 12} onChange={(e)=>setFreeDraft({...freeDraft, heightMm:Number(e.target.value)})} />
+                      </div>
+                    </div>
+                  </>
+                )}
+                {(freeDraft.type === 'barcode') && (
+                  <>
+                    <label className="block text-sm font-medium mb-1">Barkod (EAN-13)</label>
+                    <input className="w-full p-2 border rounded" value={freeDraft.text || ''} onChange={(e)=>setFreeDraft({...freeDraft, text:e.target.value})} />
+                    {(() => { const r = normalizeEan13(freeDraft.text); if (!freeDraft.text) return <p className="text-xs text-gray-500 mt-1">12 haneli girerseniz son haneyi otomatik hesaplarız</p>; if (r.error) return <p className="text-xs mt-1 text-red-600">{r.error}</p>; return <p className="text-xs mt-1 text-emerald-600">Geçerli EAN-13 ✓ (Checksum: {r.checksum})</p>; })()}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-sm mb-1">Genişlik (mm)</label>
+                        <input type="number" step={0.1} className="w-full p-2 border rounded" value={freeDraft.widthMm || 60} onChange={(e)=>setFreeDraft({...freeDraft, widthMm:Number(e.target.value)})} />
+                      </div>
+                      <div>
+                        <label className="block text-sm mb-1">Yükseklik (mm)</label>
+                        <input type="number" step={0.1} className="w-full p-2 border rounded" value={freeDraft.heightMm || 12} onChange={(e)=>setFreeDraft({...freeDraft, heightMm:Number(e.target.value)})} />
+                      </div>
+                    </div>
+                  </>
+                )}
+                {(freeDraft.type === 'image') && (
+                  <>
+                    <div className="text-xs text-gray-500 mb-1">Yüklenen görseli yeniden seçmek isterseniz üstteki “Görsel Ekle” ile tekrar ekleyin.</div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-sm mb-1">Genişlik (mm)</label>
+                        <input type="number" step={0.1} className="w-full p-2 border rounded" value={freeDraft.widthMm || 30} onChange={(e)=>setFreeDraft({...freeDraft, widthMm:Number(e.target.value)})} />
+                      </div>
+                      <div>
+                        <label className="block text-sm mb-1">Yükseklik (mm)</label>
+                        <input type="number" step={0.1} className="w-full p-2 border rounded" value={freeDraft.heightMm || 12} onChange={(e)=>setFreeDraft({...freeDraft, heightMm:Number(e.target.value)})} />
+                      </div>
+                    </div>
+                  </>
+                )}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm mb-1">X (mm)</label>
+                    <input type="number" step={0.1} className="w-full p-2 border rounded" value={freeDraft.x || 6} onChange={(e)=>setFreeDraft({...freeDraft, x:Number(e.target.value)})} />
+                  </div>
+                  <div>
+                    <label className="block text-sm mb-1">Y (mm)</label>
+                    <input type="number" step={0.1} className="w-full p-2 border rounded" value={freeDraft.y || 6} onChange={(e)=>setFreeDraft({...freeDraft, y:Number(e.target.value)})} />
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center justify-end gap-2 mt-4">
+                <button className="px-3 py-1.5 text-sm rounded bg-gray-200 dark:bg-gray-700" onClick={()=>setShowFreeDialog(false)}>Vazgeç</button>
+                <button
+                  className="px-3 py-1.5 text-sm rounded bg-purple-600 text-white"
+                  onClick={()=>{
+                    if (!freeDraft) return;
+                    const applyTo = freeEditContext === 'workspace' ? setWsItems : setFreeItems;
+                    if (editingFreeId) {
+                      applyTo((arr: FreeItem[]) => normalizeZ(arr.map(it => it.id===editingFreeId ? { ...it, ...freeDraft, id: editingFreeId } as FreeItem : it)));
+                    } else {
+                      const id = crypto.randomUUID();
+                      applyTo((arr: FreeItem[]) => normalizeZ([ ...arr, { id, ...(freeDraft as any), zIndex: getMaxZ(arr)+1 } as FreeItem ]));
+                    }
+                    setShowFreeDialog(false);
+                    setEditingFreeId(null);
+                    setFreeDraft(null);
+                    setShowPreview(true);
+                    renderZPLPreview();
+                  }}
+                >Onayla</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Serbest Mod Çalışma Alanı (ayrı pencere/modal) */}
+        {showFreeWorkspace && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/40" onClick={()=>setShowFreeWorkspace(false)} />
+            <div className="relative bg-white dark:bg-gray-800 w-full max-w-5xl rounded-lg shadow-2xl p-4 z-[101]">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-lg font-semibold">Serbest Etiket Tasarımı</h4>
+                <div className="flex items-center gap-2">
+                  <button className="px-3 py-1.5 text-sm rounded border" onClick={()=>{ setFreeEditContext('workspace'); setEditingFreeId(null); setFreeDraft({ type:'text', text:'Yeni Metin', fontMm:4, wrapWidthMm:60, x:6, y:6 }); setShowFreeDialog(true); }}>Metin</button>
+                  <button className="px-3 py-1.5 text-sm rounded border" onClick={()=>{ setFreeEditContext('workspace'); setEditingFreeId(null); setFreeDraft({ type:'barcode', text:'5901234123457', widthMm:60, heightMm:12, x:6, y:20 }); setShowFreeDialog(true); }}>Barkod</button>
+                  <input ref={imageInputRef} type="file" accept="image/*" className="hidden" onChange={(e)=>{ const f=e.target.files?.[0]; if(!f) return; const r=new FileReader(); r.onload=()=>{ setFreeEditContext('workspace'); setEditingFreeId(null); setFreeDraft({ type:'image', src:String(r.result), widthMm:30, heightMm:12, x:6, y:10 }); setShowFreeDialog(true); }; r.readAsDataURL(f); e.currentTarget.value=''; }} />
+                  <button className="px-3 py-1.5 text-sm rounded border" onClick={()=>imageInputRef.current?.click()}>Görsel</button>
+                  <div className="ml-4 flex items-center gap-2 text-sm">
+                    <span>Yakınlaştır:</span>
+                    <button className="px-2 py-1 bg-gray-200 rounded" onClick={()=>setWsZoom(z=>Math.max(0.5, Number((z-0.1).toFixed(2))))}>-</button>
+                    <input type="range" min={0.5} max={3} step={0.1} value={wsZoom} onChange={(e)=>setWsZoom(Number(e.target.value))} />
+                    <button className="px-2 py-1 bg-gray-200 rounded" onClick={()=>setWsZoom(z=>Math.min(3, Number((z+0.1).toFixed(2))))}>+</button>
+                    <span className="w-10 text-right">{Math.round(wsZoom*100)}%</span>
+                  </div>
+                  <button className="px-3 py-1.5 text-sm rounded bg-emerald-600 text-white" onClick={()=>{ setFreeMode(true); setFreeItems(wsItems); setShowFreeWorkspace(false); setShowPreview(true); setTimeout(()=>renderZPLPreview(),0); }}>Önizlemeye Aktar</button>
+                  <button className="px-3 py-1.5 text-sm rounded bg-gray-200" onClick={()=>setShowFreeWorkspace(false)}>Kapat</button>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 relative">
+                <div className="md:col-span-2">
+                  <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-4">
+                    <div className="w-full max-w-lg mx-auto bg-white dark:bg-gray-800 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-md p-4 relative">
+                      <canvas ref={wsCanvasRef} className="w-full h-auto border border-gray-300" style={{ width: `${labelWidth * 3.78 * wsZoom}px`, height: `${labelHeight * 3.78 * wsZoom}px`, maxWidth: '100%' }} />
+                      {/* Serbest öğe overlay */}
+                      <div className="absolute inset-4 pointer-events-none select-none">
+                        {wsItems.map((item) => (
+                          <div
+                            key={item.id}
+                            className="absolute bg-purple-500/10 border border-purple-500 text-[10px] text-purple-800 rounded pointer-events-auto"
+                            style={{
+                              left: `${item.x * 3.78 * wsZoom}px`,
+                              top: `${item.y * 3.78 * wsZoom}px`,
+                              width: `${((item.type==='text' ? (item.wrapWidthMm || 60) : (item.widthMm || 40)) * 3.78 * wsZoom)}px`,
+                              height: `${(item.heightMm || (item.type==='text' ? (item.fontMm||4)+6 : 12)) * 3.78 * wsZoom}px`,
+                              cursor: 'move',
+                              zIndex: 1000
+                            }}
+                            onMouseDown={(e) => {
+                              setDragKey('title');
+                              const rect = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
+                              setDragOffset({ dx: e.clientX - (rect.left + item.x * 3.78 * wsZoom), dy: e.clientY - (rect.top + item.y * 3.78 * wsZoom) });
+                              (e.currentTarget as any).dataset.freeId = item.id;
+                            }}
+                            onMouseMove={(e) => {
+                              const freeId = (e.currentTarget as any).dataset.freeId;
+                              if (!freeId || dragKey !== 'title') return;
+                              const parent = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
+                              const x = (e.clientX - parent.left - dragOffset.dx) / (3.78 * wsZoom);
+                              const y = (e.clientY - parent.top - dragOffset.dy) / (3.78 * wsZoom);
+                              setWsItems((arr)=> arr.map(it=> it.id===freeId ? { ...it, x: Math.max(0, Math.min(labelWidth-5, x)), y: Math.max(0, Math.min(labelHeight-5, y)) } : it));
+                            }}
+                            onMouseUp={() => setDragKey(null)}
+                            onMouseLeave={() => setDragKey(null)}
+                            onDoubleClick={(e)=>{ e.stopPropagation(); setFreeEditContext('workspace'); setEditingFreeId(item.id); setFreeDraft({ ...item, type: item.type }); setShowFreeDialog(true); }}
+                            >
+                            <div className="absolute left-1 top-1 text-[10px] px-1 py-0.5 bg-white/60 rounded">{item.type}</div>
+                            <button type="button" className="absolute right-1 top-1 w-4 h-4 leading-4 text-[10px] bg-red-600 text-white rounded hover:bg-red-700" onClick={(e)=>{ e.stopPropagation(); setWsRemoveId(item.id); }}>×</button>
+                              {/* İçerik önizleme */}
+                              {item.type === 'text' && (
+                                <div
+                                  className="absolute inset-1 overflow-hidden text-black pointer-events-none"
+                                  style={{ fontSize: `${(item.fontMm || 4) * 3.78 * wsZoom}px`, lineHeight: 1.1 as any }}
+                                >
+                                  {item.text}
+                                </div>
+                              )}
+                              {item.type === 'barcode' && (
+                                <div className="absolute inset-1 flex flex-col justify-end pointer-events-none">
+                                  <div
+                                    className="w-full"
+                                    style={{
+                                      height: `${Math.max(8, (item.heightMm || 12) * 3.78 * wsZoom * 0.7)}px`,
+                                      backgroundImage:
+                                        'repeating-linear-gradient(90deg, #111 0, #111 2px, transparent 2px, transparent 4px)'
+                                    }}
+                                  />
+                                  <div className="text-[10px] text-black text-center mt-1 select-none">
+                                    {item.text}
+                                  </div>
+                                </div>
+                              )}
+                              {item.type === 'image' && item.src && (
+                                <img
+                                  src={item.src}
+                                  alt="img"
+                                  className="absolute inset-0 w-full h-full object-contain pointer-events-none"
+                                />
+                              )}
+                            <div className="absolute right-0 bottom-0 w-3 h-3 bg-purple-600 cursor-se-resize"
+                              onMouseDown={(e)=>{
+                                e.stopPropagation(); setResizingKey('productName'); const parent=(e.currentTarget.parentElement as HTMLElement).getBoundingClientRect(); setResizeStart({ x0:e.clientX, y0:e.clientY, wMm: parseFloat(((parent.width)/(3.78*wsZoom)).toFixed(2)), hMm: parseFloat(((parent.height)/(3.78*wsZoom)).toFixed(2)), productFont: item.fontMm||4, productWrap: item.wrapWidthMm||60, titleFont:0, detailsGap:0, detailsFont:0, bcHeight:item.heightMm||12, bcScale:1 }); (e.currentTarget as any).dataset.freeId=item.id; }}
+                              onMouseMove={(e)=>{ if(resizingKey!=='productName') return; const freeId=(e.currentTarget as any).dataset.freeId; if(!freeId) return; const dxMm=(e.clientX-resizeStart.x0)/(3.78*wsZoom); const dyMm=(e.clientY-resizeStart.y0)/(3.78*wsZoom); setWsItems(arr=>arr.map(it=>{ if(it.id!==freeId) return it; if(it.type==='text'){ return { ...it, wrapWidthMm: Math.max(20,(it.wrapWidthMm||60)+dxMm), fontMm: Math.max(2,(it.fontMm||4)+dyMm) }; } return { ...it, widthMm: Math.max(10,(it.widthMm||40)+dxMm), heightMm: Math.max(5,(it.heightMm||12)+dyMm) }; })); }}
+                              onMouseUp={()=>setResizingKey(null)} onMouseLeave={()=>setResizingKey(null)} />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                {/* Özellikler paneli basit hali */}
+                <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-4">
+                  <div className="text-sm text-gray-600 dark:text-gray-300">Bu pencere boş etiket üzerinde serbest öğeleri düzenlemek içindir. Öğelere çift tıklayarak detaylarını düzenleyebilirsiniz. Bittiğinde “Önizlemeye Aktar”a basın.</div>
+                </div>
+              </div>
+            </div>
+            {/* Silme onayı */}
+            {wsRemoveId && (
+              <div className="fixed inset-0 z-[102] flex items-center justify-center">
+                <div className="absolute inset-0 bg-black/40" onClick={()=>setWsRemoveId(null)} />
+                <div className="relative bg-white dark:bg-gray-800 w-full max-w-sm rounded-lg shadow-lg p-4">
+                  <h4 className="text-lg font-semibold mb-2">Öğeyi Kaldır</h4>
+                  <p className="text-sm text-gray-600 dark:text-gray-300 mb-3">Seçili öğeyi kaldırmak istiyor musunuz?</p>
+                  <div className="flex items-center justify-end gap-2">
+                    <button className="px-3 py-1.5 text-sm rounded bg-gray-200 dark:bg-gray-700" onClick={()=>setWsRemoveId(null)}>Vazgeç</button>
+                    <button className="px-3 py-1.5 text-sm rounded bg-red-600 text-white" onClick={()=>{ setWsItems(items=>items.filter(i=>i.id!==wsRemoveId)); setWsRemoveId(null); }}>Kaldır</button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         {/* Kaydet/Güncelle Onayı */}
         {showSaveDialog && (
           <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -1142,6 +1478,57 @@ const LabelGenerator: React.FC = () => {
                 ) : (
                   <button className="px-3 py-1.5 text-sm rounded bg-indigo-600 text-white" onClick={()=>{saveTemplate(); setShowSaveDialog(false);}}>Kaydet</button>
                 )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Şablon Sil Onayı */}
+        {deleteTemplateId && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/40" onClick={()=>setDeleteTemplateId(null)} />
+            <div className="relative bg-white dark:bg-gray-800 w-full max-w-md rounded-lg shadow-lg p-4">
+              <h4 className="text-lg font-semibold mb-2">Şablonu Sil</h4>
+              <p className="text-sm text-gray-600 dark:text-gray-300 mb-3">Bu şablonu kalıcı olarak silmek istiyor musunuz?</p>
+              <div className="flex items-center justify-end gap-2">
+                <button className="px-3 py-1.5 text-sm rounded bg-gray-200 dark:bg-gray-700" onClick={()=>setDeleteTemplateId(null)}>Vazgeç</button>
+                <button className="px-3 py-1.5 text-sm rounded bg-red-600 text-white" onClick={async()=>{ await removeTemplate(deleteTemplateId); setDeleteTemplateId(null); }}>Sil</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Öğeyi Kaldır Onayı (sabit öğe) */}
+        {removeTarget && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/40" onClick={()=>setRemoveTarget(null)} />
+            <div className="relative bg-white dark:bg-gray-800 w-full max-w-sm rounded-lg shadow-lg p-4">
+              <h4 className="text-lg font-semibold mb-2">Öğeyi Kaldır</h4>
+              <p className="text-sm text-gray-600 dark:text-gray-300 mb-3">“{removeTarget}” öğesini gizlemek istiyor musunuz?</p>
+              <div className="flex items-center justify-end gap-2">
+                <button className="px-3 py-1.5 text-sm rounded bg-gray-200 dark:bg-gray-700" onClick={()=>setRemoveTarget(null)}>Vazgeç</button>
+                <button
+                  className="px-3 py-1.5 text-sm rounded bg-red-600 text-white"
+                  onClick={() => { setVisible(v=>({ ...v, [removeTarget]: false })); setRemoveTarget(null); }}
+                >Kaldır</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Öğeyi Kaldır Onayı (serbest öğe) */}
+        {removeFreeId && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/40" onClick={()=>setRemoveFreeId(null)} />
+            <div className="relative bg-white dark:bg-gray-800 w-full max-w-sm rounded-lg shadow-lg p-4">
+              <h4 className="text-lg font-semibold mb-2">Öğeyi Kaldır</h4>
+              <p className="text-sm text-gray-600 dark:text-gray-300 mb-3">Seçili öğeyi kaldırmak istiyor musunuz?</p>
+              <div className="flex items-center justify-end gap-2">
+                <button className="px-3 py-1.5 text-sm rounded bg-gray-200 dark:bg-gray-700" onClick={()=>setRemoveFreeId(null)}>Vazgeç</button>
+                <button
+                  className="px-3 py-1.5 text-sm rounded bg-red-600 text-white"
+                  onClick={() => { setFreeItems(items => items.filter(i => i.id !== removeFreeId)); setRemoveFreeId(null); }}
+                >Kaldır</button>
               </div>
             </div>
           </div>
