@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { DEFAULT_LABEL_TYPES, LabelFieldKey, LabelTypeDef, buildDefaultFields } from '../lib/label_settings';
+import ConfirmDialog from '../components/ConfirmDialog';
 
 const ALL_FIELDS: LabelFieldKey[] = [
   'productName','barcode','serialNumber','entryDate','expiryDate','amount','invoiceNumber','batchNumber','supplier','logo'
@@ -47,10 +48,16 @@ const LabelSettings: React.FC = () => {
     setAnchors((t.anchors as any) || { title:{x:6,y:6}, productName:{x:6,y:13}, details:{x:6,y:26}, barcode:{x:6,y:34} });
   };
 
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const onDelete = async (id?: string) => {
     if (!id) return;
-    if (!confirm('Bu etiket türünü silmek istiyor musunuz?')) return;
-    await supabase.from('label_types').delete().eq('id', id);
+    setConfirmDeleteId(id);
+  };
+
+  const confirmDelete = async () => {
+    if (!confirmDeleteId) return;
+    await supabase.from('label_types').delete().eq('id', confirmDeleteId);
+    setConfirmDeleteId(null);
     await load();
   };
 
@@ -69,7 +76,8 @@ const LabelSettings: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
+    <>
+      <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Etiket Ayarları</h1>
         <div className="text-sm text-gray-500">Etiket türlerini oluşturun ve alan görünürlüğünü/zorunluluğunu yönetin.</div>
@@ -154,7 +162,16 @@ const LabelSettings: React.FC = () => {
           </div>
         </div>
       </div>
-    </div>
+      <ConfirmDialog
+        open={!!confirmDeleteId}
+        title="Silme Onayı"
+        message="Bu etiket türünü silmek istiyor musunuz?"
+        confirmText="Sil"
+        cancelText="Vazgeç"
+        onConfirm={confirmDelete}
+        onCancel={() => setConfirmDeleteId(null)}
+      />
+    </>
   );
 };
 

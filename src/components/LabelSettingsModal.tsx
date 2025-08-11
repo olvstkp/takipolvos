@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { DEFAULT_LABEL_TYPES, LabelFieldKey, LabelTypeDef, buildDefaultFields } from '../lib/label_settings';
+import ConfirmDialog from './ConfirmDialog';
 
 const ALL_FIELDS: LabelFieldKey[] = [
   'productName','barcode','serialNumber','entryDate','expiryDate','amount','invoiceNumber','batchNumber','supplier','logo'
@@ -44,6 +45,7 @@ const LabelSettingsModal: React.FC<Props> = ({ open, onClose }) => {
   const previewRef = useRef<HTMLDivElement>(null);
   const [dragKey, setDragKey] = useState<'title'|'productName'|'details'|'barcode'|null>(null);
   const [dragOffset, setDragOffset] = useState<{dx:number; dy:number}>({ dx:0, dy:0 });
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const filtered = useMemo(() => (
     types.filter(t => t.name.toLowerCase().includes(search.toLowerCase()))
@@ -94,8 +96,13 @@ const LabelSettingsModal: React.FC<Props> = ({ open, onClose }) => {
 
   const onDelete = async (id?: string) => {
     if (!id) return;
-    if (!confirm('Bu etiket türünü silmek istiyor musunuz?')) return;
-    await supabase.from('label_types').delete().eq('id', id);
+    setConfirmDeleteId(id);
+  };
+
+  const confirmDelete = async () => {
+    if (!confirmDeleteId) return;
+    await supabase.from('label_types').delete().eq('id', confirmDeleteId);
+    setConfirmDeleteId(null);
     await load();
   };
 
@@ -255,11 +262,21 @@ const LabelSettingsModal: React.FC<Props> = ({ open, onClose }) => {
             </div>
           </div>
         </div>
+        <ConfirmDialog
+          open={!!confirmDeleteId}
+          title="Silme Onayı"
+          message="Bu etiket türünü silmek istiyor musunuz?"
+          confirmText="Sil"
+          cancelText="Vazgeç"
+          onConfirm={confirmDelete}
+          onCancel={() => setConfirmDeleteId(null)}
+        />
       </div>
     </div>
   );
 };
 
 export default LabelSettingsModal;
+
 
 
