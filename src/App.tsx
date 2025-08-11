@@ -16,6 +16,7 @@ import Products from './pages/Products';
 import CustomerManagement from './pages/CustomerManagement';
 import LabelGenerator from './pages/LabelGenerator';
 import Settings from './pages/Settings';
+import LabelSettings from './pages/LabelSettings';
 
 function App() {
   return (
@@ -36,6 +37,7 @@ function App() {
           <Route path="/products" element={<Products />} />
           <Route path="/customers" element={<CustomerManagement />} />
           <Route path="/labels" element={<LabelGenerator />} />
+          <Route path="/label-settings" element={<LabelSettings />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
       </Layout>

@@ -1,9 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
+// import { Link } from 'react-router-dom';
+import LabelSettingsModal from '../components/LabelSettingsModal';
 import { Printer, QrCode, Download, Type, Barcode as BarcodeIcon, Image as ImageIcon, ZoomIn, ZoomOut, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import FreeItemsPanel from '../components/FreeItemsPanel';
 import PreviewCanvas from '../components/PreviewCanvas';
 import StandardForm from '../components/StandardForm';
+import { showToast } from '../utils/toast';
 
 interface LabelData {
   productName: string;
@@ -32,7 +35,9 @@ const LabelGenerator: React.FC = () => {
     barcode: ''
   });
 
-  const [labelType, setLabelType] = useState<string>('Koli etiketi');
+  const [labelType, setLabelType] = useState<string>('');
+  const [labelTypeFields, setLabelTypeFields] = useState<any | null>(null);
+  const [labelTypeOptions, setLabelTypeOptions] = useState<string[]>([]);
   // Etiket boyutu (mm) - 104 x 50.8 mm
   const [labelWidth, setLabelWidth] = useState<number>(104);
   const [labelHeight, setLabelHeight] = useState<number>(50.8);
@@ -47,12 +52,15 @@ const LabelGenerator: React.FC = () => {
   });
   const [zplCode, setZplCode] = useState('');
   const [showPreview, setShowPreview] = useState(false);
+  const [showLabelSettings, setShowLabelSettings] = useState(false);
+  // /labels sayfası ilk açılışta kısa yükleniyor durumu
+  const [initialLoading, setInitialLoading] = useState<boolean>(true);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
   // Ajan vb. yok – sade mod
   // Resize yumuşatma: hız ve easing
-  const RESIZE_SENS = 0.050; // daha düşük = daha az hassas
-  const RESIZE_SMOOTH = 0.015; // daha düşük = daha yumuşak/istekleri daha yavaş takip eder
+  const RESIZE_SENS = 0.080; // artırıldı: daha hızlı tepki
+  const RESIZE_SMOOTH = 0.030; // artırıldı: daha az gecikme
   const resizeDeltaRef = useRef<{dx:number; dy:number}>({ dx:0, dy:0 });
 
   // Şirket logoları (Supabase -> company_logo)
@@ -173,6 +181,28 @@ const LabelGenerator: React.FC = () => {
   });
   useEffect(() => { try { localStorage.setItem('label_visibility_v1', JSON.stringify(visible)); } catch {} }, [visible]);
 
+  // Tür kurallarını görünürlükle birleştir (type-visible AND user-visible)
+  const effectiveVisible = React.useMemo(() => {
+    const typeVis: Record<AnchorKey, boolean> = {
+      title: true,
+      productName: true,
+      details: true,
+      barcode: true,
+    };
+    if (labelTypeFields) {
+      typeVis.productName = labelTypeFields.productName?.visible !== false;
+      const detailKeys = ['amount','serialNumber','batchNumber','invoiceNumber','entryDate','expiryDate','supplier'];
+      typeVis.details = detailKeys.some((k: any)=> labelTypeFields[k]?.visible !== false);
+      typeVis.barcode = labelTypeFields.barcode?.visible !== false;
+    }
+    return {
+      title: visible.title && typeVis.title,
+      productName: visible.productName && typeVis.productName,
+      details: visible.details && typeVis.details,
+      barcode: visible.barcode && typeVis.barcode,
+    } as Record<AnchorKey, boolean>;
+  }, [visible, labelTypeFields]);
+
   // Serbest Mod öğeleri
   type FreeItemType = 'text' | 'barcode' | 'image' | 'line' | 'circle' | 'ring';
   type FreeItem = {
@@ -285,6 +315,7 @@ const LabelGenerator: React.FC = () => {
   // const [loadingTemplates, setLoadingTemplates] = useState<boolean>(false);
   const [showTemplateModal, setShowTemplateModal] = useState<boolean>(false);
   const [templateSearch, setTemplateSearch] = useState<string>('');
+  const [templateTypeFilter, setTemplateTypeFilter] = useState<string>('Hepsi');
   const [currentTemplateId, setCurrentTemplateId] = useState<string | null>(null);
   const [baselineState, setBaselineState] = useState<any | null>(null);
   const [isDirty, setIsDirty] = useState<boolean>(false);
@@ -343,6 +374,24 @@ const LabelGenerator: React.FC = () => {
       setFreeMode(true);
       setEditMode(true);
       setShowPreview(true);
+      // serbest moda geçerken standard sürükleme/resize state'lerini sıfırla
+      setDraggingAnchorKey(null);
+      setResizingAnchorKeyGlobal(null);
+      setDraggingFreeId(null);
+      setResizingFreeIdGlobal(null);
+      setSelectedFreeId(null);
+    } else {
+      // standart moda geçişte serbest mod bayrağını kapat ve state'leri temizle
+      setFreeMode(false);
+      setEditMode(true);
+      setShowPreview(true);
+      setDraggingAnchorKey(null);
+      setResizingAnchorKeyGlobal(null);
+      setDraggingFreeId(null);
+      setResizingFreeIdGlobal(null);
+      setSelectedFreeId(null);
+      // ZPL'i sekmeye göre tazelemek için temizle
+      setZplCode('');
     }
   }, [activeTab]);
 
@@ -361,6 +410,12 @@ const LabelGenerator: React.FC = () => {
     freeMode,
     freeItems,
   });
+
+  // İlk 3 saniyelik yükleniyor sekmesi
+  useEffect(() => {
+    const timer = setTimeout(() => setInitialLoading(false), 3000);
+    return () => clearTimeout(timer);
+  }, []);
 
   const applySerializedState = (s: any) => {
     if (!s) return;
@@ -389,6 +444,57 @@ const LabelGenerator: React.FC = () => {
   };
 
   useEffect(() => { fetchTemplates(); }, [activeTab]);
+
+  // Etiket türü alan görünürlüğü ve anchor yükleme
+  useEffect(() => {
+    const loadType = async () => {
+      try {
+        const { data: list } = await supabase.from('label_types').select('name, anchors').order('name');
+        if (list && Array.isArray(list)) {
+          setLabelTypeOptions(list.map((r: any)=> r.name));
+          // Otomatik seçim istemiyoruz; kullanıcı seçecek
+        }
+        if (!labelType) { setLabelTypeFields(null); return; }
+        const { data } = await supabase.from('label_types').select('fields, anchors').eq('name', labelType).maybeSingle();
+        if (data?.fields) setLabelTypeFields(data.fields);
+        else {
+          // Supabase kaydı yoksa local defaultlara düş
+          try {
+            const { DEFAULT_LABEL_TYPES } = await import('../lib/label_settings');
+            const def = DEFAULT_LABEL_TYPES.find(t => t.name === labelType);
+            setLabelTypeFields(def?.fields || null);
+            if (!list || list.length === 0) {
+              setLabelTypeOptions(DEFAULT_LABEL_TYPES.map(t=>t.name));
+            }
+          } catch {
+            setLabelTypeFields(null);
+          }
+        }
+        // Anchor’ları uygula (DB öncelikli, yoksa default)
+        if (data?.anchors) {
+          setAnchors(a=> ({ ...a, ...data.anchors }));
+        } else {
+          try {
+            const { DEFAULT_LABEL_TYPES } = await import('../lib/label_settings');
+            const def = DEFAULT_LABEL_TYPES.find(t => t.name === labelType);
+            if (def?.anchors) setAnchors(a=> ({ ...a, ...def.anchors! }));
+          } catch {}
+        }
+      } catch { setLabelTypeFields(null); }
+    };
+    loadType();
+  }, [labelType]);
+
+  // Tür görünürlüklerini kullanıcı görünürlüğü ile senkronla (title=logo)
+  useEffect(() => {
+    if (!labelTypeFields) return;
+    setVisible(() => ({
+      title: labelTypeFields.logo?.visible !== false,
+      productName: labelTypeFields.productName?.visible !== false,
+      details: ['amount','serialNumber','batchNumber','invoiceNumber','entryDate','expiryDate','supplier'].some(k => (labelTypeFields as any)[k]?.visible !== false),
+      barcode: labelTypeFields.barcode?.visible !== false,
+    }));
+  }, [labelTypeFields]);
 
   const generateThumbnail = (): string | undefined => {
     const canvas = canvasRef.current;
@@ -484,13 +590,17 @@ const LabelGenerator: React.FC = () => {
     ctx.textBaseline = 'top';
 
     // Basit metin sarma
-    const wrapText = (text: string, x: number, y: number, maxWidth: number, lineHeight: number) => {
-      const words = text.split(' ');
+    const wrapText = (text: string, x: number, y: number, maxWidth: number, lineHeight: number, maxHeight?: number) => {
+      const paragraphs = String(text).replace(/\r\n/g, '\n').split('\n');
+      const startY = y;
+      for (let p = 0; p < paragraphs.length; p++) {
+        const words = paragraphs[p].split(' ');
       let line = '';
       for (let n = 0; n < words.length; n++) {
         const testLine = line + words[n] + ' ';
         const metrics = ctx.measureText(testLine);
         if (metrics.width > maxWidth && n > 0) {
+            if (maxHeight !== undefined && (y - startY + lineHeight) > maxHeight) return y + lineHeight; // stop
           ctx.fillText(line.trim(), x, y);
           line = words[n] + ' ';
           y += lineHeight;
@@ -498,8 +608,14 @@ const LabelGenerator: React.FC = () => {
           line = testLine;
         }
       }
+        if (maxHeight === undefined || (y - startY + lineHeight) <= maxHeight) {
       ctx.fillText(line.trim(), x, y);
-      return y + lineHeight; // next y
+          y += lineHeight;
+        } else {
+          return y; // exceeded
+        }
+      }
+      return y; // next y after all paragraphs
     };
 
     // EAN-13 hesaplama/çizim yardımcıları
@@ -566,12 +682,10 @@ const LabelGenerator: React.FC = () => {
       ctx.fillText(rightText, x + modulePx * 50, textY);
     };
 
-    switch (labelType) {
-      case 'Koli etiketi':
-        // Standart mod öğeleri sadece Standart sekmesinde çizilsin
-        if (activeTab === 'standart') {
-          // Başlık: logo varsa çiz, yoksa metin
-          if (visible.title) {
+    // Standart mod çizimleri — tüm türler için aynı şablon (anchors + görünürlük kuralları)
+    if (activeTab === 'standart') {
+      // Başlık: logo varsa çiz, yoksa şirket adı
+      if (effectiveVisible.title) {
             const logoImg = logoImages[selectedCompany];
             if (logoImg) {
               const targetHeightPx = mmToPx(styles.title.font + 4);
@@ -584,57 +698,73 @@ const LabelGenerator: React.FC = () => {
                 targetWidthPx,
                 targetHeightPx
               );
-            } else {
+        } else if (selectedCompany) {
               ctx.font = `bold ${mmToPx(styles.title.font)}px Arial`;
-              ctx.fillText('OLIVOS', mmToPx(anchors.title.x), mmToPx(anchors.title.y));
-            }
+          ctx.fillText(selectedCompany, mmToPx(anchors.title.x), mmToPx(anchors.title.y));
           }
+        }
 
-          // Ürün adı (sararak)
-          if (visible.productName) {
-            ctx.font = `${mmToPx(styles.productName.font)}px Arial`;
-            let y = mmToPx(anchors.productName.y);
-            const left = mmToPx(anchors.productName.x);
-            const maxW = mmToPx(Math.min(labelWidth - anchors.productName.x - 6, styles.productName.wrapWidth));
-            y = wrapText(labelData.productName, left, y, maxW, mmToPx(styles.details.lineGap));
-          }
+      // Ürün adı (genişliğe göre sar; etiket alt sınırını aşma)
+      if (effectiveVisible.productName && labelData.productName) {
+          ctx.font = `${mmToPx(styles.productName.font)}px Arial`;
+          const top = mmToPx(anchors.productName.y);
+          const left = mmToPx(anchors.productName.x);
+          const maxW = mmToPx(Math.min(labelWidth - anchors.productName.x - 6, styles.productName.wrapWidth));
+          const maxH = mmToPx(labelHeight - anchors.productName.y - 2);
+          let y = top;
+          y = wrapText(labelData.productName, left, y, maxW, mmToPx(styles.details.lineGap), maxH);
+        }
 
-          // Diğer alanlar (daha küçük yazı)
-          if (visible.details) {
-            ctx.font = `${mmToPx(styles.details.font)}px Arial`;
-            let detX = mmToPx(anchors.details.x);
-            let detY = mmToPx(anchors.details.y);
-            const stepY = mmToPx(styles.details.lineGap);
-            const addLine = (text: string) => { ctx.fillText(text, detX, detY); detY += stepY; };
-            if (labelData.amount) addLine(`Miktar: ${labelData.amount}`);
-            if (labelData.serialNumber) addLine(`Seri: ${labelData.serialNumber}`);
-            if (labelData.batchNumber) addLine(`Parti: ${labelData.batchNumber}`);
-            if (labelData.invoiceNumber) addLine(`İrsaliye: ${labelData.invoiceNumber}`);
-            if (labelData.entryDate) addLine(`Giriş: ${labelData.entryDate}`);
-            if (labelData.expiryDate) addLine(`SKT: ${labelData.expiryDate}`);
-            if (labelData.supplier) addLine(`Tedarikçi: ${labelData.supplier}`);
-          }
+      // Detaylar (genişliğe göre sar; alt sınırı aşma)
+      if (effectiveVisible.details) {
+          ctx.font = `${mmToPx(styles.details.font)}px Arial`;
+          const detX = mmToPx(anchors.details.x);
+          const detTop = mmToPx(anchors.details.y);
+          const stepY = mmToPx(styles.details.lineGap);
+          // genişlik hesaplanıyor ama şu an sadece satır sarma için x kullanılıyor
+          const detWidthPx = mmToPx(Math.min(labelWidth - anchors.details.x - 6, styles.details.widthMm));
+          void detWidthPx; // keep for future multi-column; avoid unused warning
+          const detHeightPx = mmToPx(labelHeight - anchors.details.y - 2);
+          let detY = detTop;
+          const addLine = (text: string) => {
+            if (!text) return;
+            if (detY + stepY - detTop > detHeightPx) return; // sığmıyorsa yazma
+            ctx.fillText(text, detX, detY);
+            detY += stepY;
+          };
+          addLine(labelData.amount ? `Miktar: ${labelData.amount}` : '');
+          addLine(labelData.serialNumber ? `Seri: ${labelData.serialNumber}` : '');
+          addLine(labelData.batchNumber ? `Parti: ${labelData.batchNumber}` : '');
+          addLine(labelData.invoiceNumber ? `İrsaliye: ${labelData.invoiceNumber}` : '');
+          addLine(labelData.entryDate ? `Giriş: ${labelData.entryDate}` : '');
+          addLine(labelData.expiryDate ? `SKT: ${labelData.expiryDate}` : '');
+          addLine(labelData.supplier ? `Tedarikçi: ${labelData.supplier}` : '');
+        }
 
-          // Barkod (EAN-13)
-          if (visible.barcode) {
-            const ean = toEAN13(labelData.barcode);
-            if (ean) {
-              const barWidthMm = Math.max(20, styles.barcode.widthMm);
-              const barLeft = mmToPx(anchors.barcode.x);
-              const barTop = mmToPx(anchors.barcode.y);
-              drawEAN13(ean, barLeft, barTop, barWidthMm, styles.barcode.height);
-            }
+      // Barkod
+      if (effectiveVisible.barcode) {
+          const ean = toEAN13(labelData.barcode);
+          if (ean) {
+            const barWidthMm = Math.max(20, styles.barcode.widthMm);
+            const barLeft = mmToPx(anchors.barcode.x);
+            const barTop = mmToPx(anchors.barcode.y);
+            drawEAN13(ean, barLeft, barTop, barWidthMm, styles.barcode.height);
+        }
           }
         }
         
-        // Serbest mod çizimleri: sadece Serbest sekmesinde
-        if (activeTab==='serbest' && freeMode && freeItems.length > 0) {
+    // Serbest mod çizimleri: Serbest sekmesinde veya Standartta freeMode aktifken
+        if (freeMode && freeItems.length > 0) {
           // zIndex'e göre sırala ve çiz
           const sorted = [...freeItems].sort((a,b)=> (a.zIndex||0) - (b.zIndex||0));
           for (const item of sorted) {
             if (item.type === 'text' && item.text) {
               ctx.font = `${mmToPx(item.fontMm || 4)}px Arial`;
-              wrapText(item.text, mmToPx(item.x), mmToPx(item.y), mmToPx(item.wrapWidthMm || (labelWidth - item.x - 6)), mmToPx(4));
+              const left = mmToPx(item.x);
+              const top = mmToPx(item.y);
+              const w = mmToPx(item.wrapWidthMm || (labelWidth - item.x - 6));
+              const maxH = mmToPx(labelHeight - item.y - 2);
+              wrapText(item.text, left, top, w, mmToPx(4), maxH);
             } else if (item.type === 'barcode' && item.text) {
               const ean = toEAN13(item.text);
               if (ean) {
@@ -678,54 +808,6 @@ const LabelGenerator: React.FC = () => {
               ctx.stroke();
             }
           }
-        }
-        break;
-        
-      case 'Numune Etiketi':
-        ctx.font = `bold ${mmToPx(5)}px Arial`;
-        ctx.fillText('NUMUNE', mmToPx(6), mmToPx(6));
-
-        ctx.font = `${mmToPx(4)}px Arial`;
-        wrapText(labelData.productName, mmToPx(6), mmToPx(13), mmToPx(labelWidth - 12), mmToPx(5));
-
-        ctx.font = `${mmToPx(3.2)}px Arial`;
-        let yN = mmToPx(23);
-        const leftN = mmToPx(6);
-        const addLineN = (t: string) => { ctx.fillText(t, leftN, yN); yN += mmToPx(4.2); };
-        if (labelData.serialNumber) addLineN(`Seri No: ${labelData.serialNumber}`);
-        if (labelData.entryDate) addLineN(`Giriş: ${labelData.entryDate}`);
-        if (labelData.expiryDate) addLineN(`SKT: ${labelData.expiryDate}`);
-        if (labelData.amount) addLineN(`Miktar: ${labelData.amount}`);
-        if (labelData.batchNumber) addLineN(`Parti: ${labelData.batchNumber}`);
-        if (labelData.supplier) addLineN(`Tedarikçi: ${labelData.supplier}`);
-        
-        // QR kod simülasyonu
-        ctx.fillStyle = '#333';
-        ctx.fillRect(mmToPx(6), mmToPx(labelHeight - 18), mmToPx(16), mmToPx(16));
-        break;
-        
-      case 'Yarı Mamül Etiketi':
-        ctx.font = `bold ${mmToPx(5)}px Arial`;
-        ctx.fillText('YARI MAMÜL', mmToPx(6), mmToPx(6));
-
-        ctx.font = `${mmToPx(4)}px Arial`;
-        wrapText(labelData.productName, mmToPx(6), mmToPx(13), mmToPx(labelWidth - 12), mmToPx(5));
-
-        ctx.font = `${mmToPx(3.2)}px Arial`;
-        let yY = mmToPx(23);
-        const leftY = mmToPx(6);
-        const addLineY = (t: string) => { ctx.fillText(t, leftY, yY); yY += mmToPx(4.2); };
-        if (labelData.serialNumber) addLineY(`Seri No: ${labelData.serialNumber}`);
-        if (labelData.entryDate) addLineY(`Giriş: ${labelData.entryDate}`);
-        if (labelData.expiryDate) addLineY(`SKT: ${labelData.expiryDate}`);
-        if (labelData.amount) addLineY(`Miktar: ${labelData.amount}`);
-        if (labelData.batchNumber) addLineY(`Parti: ${labelData.batchNumber}`);
-        if (labelData.supplier) addLineY(`Tedarikçi: ${labelData.supplier}`);
-        
-        // QR kod simülasyonu
-        ctx.fillStyle = '#333';
-        ctx.fillRect(mmToPx(6), mmToPx(labelHeight - 18), mmToPx(16), mmToPx(16));
-        break;
     }
     // Koyuluk uygulaması (siyahları güçlendirme)
     if (darkness && Math.abs(darkness - 1) > 0.01) {
@@ -744,89 +826,83 @@ const LabelGenerator: React.FC = () => {
 
   // Canvas ve ZPL'i sürekli güncelle
   useEffect(() => {
-    renderZPLPreview();
+      renderZPLPreview();
     try { generateZPL(); } catch {}
-  }, [labelData, labelType, labelWidth, labelHeight, showPreview, darkness, anchors, styles, visible, freeMode, freeItems, dpi, zplDarkness]);
+  }, [labelData, labelType, labelWidth, labelHeight, showPreview, darkness, anchors, styles, visible, freeMode, freeItems, dpi, zplDarkness, activeTab, selectedCompany, logoImages]);
 
   const generateZPL = () => {
-    let zpl = '';
     const PW = mmToDots(labelWidth);
     const LL = mmToDots(labelHeight);
-    
-    switch (labelType) {
-      case 'Koli etiketi':
-        zpl = `
-^XA
-^MD${Math.min(30, Math.max(0, Math.round(zplDarkness)))}
-^PW${PW}
-^LL${LL}
-^FO${mmToDots(20)},${mmToDots(10)}^A0N,${mmToDots(6)},${mmToDots(6)}^FDOLIVOS^FS
-^FO${mmToDots(20)},${mmToDots(35)}^A0N,${mmToDots(5)},${mmToDots(5)}^FD${labelData.productName}^FS
-^FO${mmToDots(20)},${mmToDots(55)}^A0N,${mmToDots(4)},${mmToDots(4)}^FD${labelData.amount}^FS
-^FO${mmToDots(20)},${mmToDots(70)}^A0N,${mmToDots(4)},${mmToDots(4)}^FDKoli İçi: ${labelData.batchNumber}^FS
-^FO${mmToDots(20)},${mmToDots(85)}^BY3^BCN,${mmToDots(12)},Y,N,N^FD8681917311582^FS
-^XZ`.trim();
-        break;
-        
-      case 'Numune Etiketi':
-        zpl = `
-^XA
-^MD${Math.min(30, Math.max(0, Math.round(zplDarkness)))}
-^PW${PW}
-^LL${LL}
-^FO${mmToDots(20)},${mmToDots(10)}^A0N,${mmToDots(5)},${mmToDots(5)}^FDNUMUNE^FS
-^FO${mmToDots(20)},${mmToDots(30)}^A0N,${mmToDots(4.5)},${mmToDots(4.5)}^FD${labelData.productName}^FS
-^FO${mmToDots(20)},${mmToDots(48)}^A0N,${mmToDots(4)},${mmToDots(4)}^FDSeri No: ${labelData.serialNumber}^FS
-^FO${mmToDots(20)},${mmToDots(66)}^A0N,${mmToDots(4)},${mmToDots(4)}^FDGiriş: ${labelData.entryDate}^FS
-^FO${mmToDots(20)},${mmToDots(84)}^A0N,${mmToDots(4)},${mmToDots(4)}^FDSKT: ${labelData.expiryDate}^FS
-^FO${mmToDots(20)},${mmToDots(102)}^A0N,${mmToDots(4)},${mmToDots(4)}^FDMiktar: ${labelData.amount}^FS
-^FO${mmToDots(20)},${mmToDots(120)}^A0N,${mmToDots(4)},${mmToDots(4)}^FDParti: ${labelData.batchNumber}^FS
-^FO${mmToDots(20)},${mmToDots(138)}^A0N,${mmToDots(4)},${mmToDots(4)}^FDTedarikçi: ${labelData.supplier}^FS
-^FO${mmToDots(20)},${mmToDots(156)}^BY3^BCN,${mmToDots(10)},Y,N,N^FD${labelData.serialNumber}^FS
-^XZ`.trim();
-        break;
-        
-      case 'Yarı Mamül Etiketi':
-        zpl = `
-^XA
-^MD${Math.min(30, Math.max(0, Math.round(zplDarkness)))}
-^PW${PW}
-^LL${LL}
-^FO${mmToDots(20)},${mmToDots(10)}^A0N,${mmToDots(5)},${mmToDots(5)}^FDYARI MAMÜL^FS
-^FO${mmToDots(20)},${mmToDots(30)}^A0N,${mmToDots(4.5)},${mmToDots(4.5)}^FD${labelData.productName}^FS
-^FO${mmToDots(20)},${mmToDots(48)}^A0N,${mmToDots(4)},${mmToDots(4)}^FDSeri No: ${labelData.serialNumber}^FS
-^FO${mmToDots(20)},${mmToDots(66)}^A0N,${mmToDots(4)},${mmToDots(4)}^FDGiriş: ${labelData.entryDate}^FS
-^FO${mmToDots(20)},${mmToDots(84)}^A0N,${mmToDots(4)},${mmToDots(4)}^FDSKT: ${labelData.expiryDate}^FS
-^FO${mmToDots(20)},${mmToDots(102)}^A0N,${mmToDots(4)},${mmToDots(4)}^FDMiktar: ${labelData.amount}^FS
-^FO${mmToDots(20)},${mmToDots(120)}^A0N,${mmToDots(4)},${mmToDots(4)}^FDParti: ${labelData.batchNumber}^FS
-^FO${mmToDots(20)},${mmToDots(138)}^A0N,${mmToDots(4)},${mmToDots(4)}^FDTedarikçi: ${labelData.supplier}^FS
-^FO${mmToDots(20)},${mmToDots(156)}^BY3^BCN,${mmToDots(10)},Y,N,N^FD${labelData.serialNumber}^FS
-^XZ`.trim();
-        break;
-        
-      default:
-        zpl = `
-^XA
-^MD${Math.min(30, Math.max(0, Math.round(zplDarkness)))}
-^PW${PW}
-^LL${LL}
-^FO${mmToDots(50)},${mmToDots(50)}^A0N,${mmToDots(7)},${mmToDots(7)}^FD${labelData.productName}^FS
-^FO${mmToDots(50)},${mmToDots(100)}^A0N,${mmToDots(5)},${mmToDots(5)}^FDSeri No: ${labelData.serialNumber}^FS
-^FO${mmToDots(50)},${mmToDots(130)}^A0N,${mmToDots(5)},${mmToDots(5)}^FDGiriş: ${labelData.entryDate}^FS
-^FO${mmToDots(50)},${mmToDots(160)}^A0N,${mmToDots(5)},${mmToDots(5)}^FDSKU: ${labelData.expiryDate}^FS
-^FO${mmToDots(50)},${mmToDots(190)}^A0N,${mmToDots(5)},${mmToDots(5)}^FDMiktar: ${labelData.amount}^FS
-^FO${mmToDots(50)},${mmToDots(220)}^A0N,${mmToDots(5)},${mmToDots(5)}^FDIrsaliye: ${labelData.invoiceNumber}^FS
-^FO${mmToDots(50)},${mmToDots(250)}^A0N,${mmToDots(5)},${mmToDots(5)}^FDParti: ${labelData.batchNumber}^FS
-^FO${mmToDots(50)},${mmToDots(280)}^A0N,${mmToDots(5)},${mmToDots(5)}^FDTedarikçi: ${labelData.supplier}^FS
-^FO${mmToDots(300)},${mmToDots(50)}^BQN,2,6^FDQA,${labelData.serialNumber}^FS
-^XZ`.trim();
+    const lines: string[] = [];
+    lines.push('^XA');
+    lines.push(`^MD${Math.min(30, Math.max(0, Math.round(zplDarkness)))}`);
+    lines.push(`^PW${PW}`);
+    lines.push(`^LL${LL}`);
+    // Başlık: sadece şirket adı metin olarak (logo ZPL'e gömülmüyor)
+    if (effectiveVisible.title && selectedCompany) {
+      lines.push(`^FO${mmToDots(anchors.title.x)},${mmToDots(anchors.title.y)}^A0N,${mmToDots(styles.title.font)},${mmToDots(styles.title.font)}^FD${selectedCompany}^FS`);
     }
-    
+    // Ürün adı
+    if (effectiveVisible.productName && labelData.productName) {
+      lines.push(`^FO${mmToDots(anchors.productName.x)},${mmToDots(anchors.productName.y)}^A0N,${mmToDots(styles.productName.font)},${mmToDots(styles.productName.font)}^FD${labelData.productName}^FS`);
+    }
+    // Detay satırları
+    let detY = anchors.details.y;
+    const pushDetail = (text?: string, label?: string) => {
+      if (!text) return;
+      lines.push(`^FO${mmToDots(anchors.details.x)},${mmToDots(detY)}^A0N,${mmToDots(styles.details.font)},${mmToDots(styles.details.font)}^FD${label ? label+': ' : ''}${text}^FS`);
+      detY += styles.details.lineGap;
+    };
+    if (effectiveVisible.details) {
+      pushDetail(labelData.amount, 'Miktar');
+      pushDetail(labelData.serialNumber, 'Seri');
+      pushDetail(labelData.batchNumber, 'Parti');
+      pushDetail(labelData.invoiceNumber, 'İrsaliye');
+      pushDetail(labelData.entryDate, 'Giriş');
+      pushDetail(labelData.expiryDate, 'SKT');
+      pushDetail(labelData.supplier, 'Tedarikçi');
+    }
+    // Barkod
+    const ean = labelData.barcode ? labelData.barcode.replace(/\D/g,'') : '';
+    if (effectiveVisible.barcode && ean) {
+      lines.push(`^FO${mmToDots(anchors.barcode.x)},${mmToDots(anchors.barcode.y)}^BY3^BCN,${mmToDots(styles.barcode.height)},Y,N,N^FD${ean}^FS`);
+    }
+    lines.push('^XZ');
+    const zpl = lines.join('\n');
     setZplCode(zpl);
     setShowPreview(true);
   };
 
   const printLabel = async () => {
+    // Zorunlu alan kontrolü
+    const req = labelTypeFields as any;
+    const missing: string[] = [];
+    if (req) {
+      const need = [
+        ['productName','Ürün Adı'],
+        ['barcode','Barkod'],
+        ['serialNumber','Seri No'],
+        ['entryDate','Giriş Tarihi'],
+        ['expiryDate','Son Kullanma Tarihi'],
+        ['amount','Miktar'],
+        ['invoiceNumber','İrsaliye No'],
+        ['batchNumber','Parti No'],
+        ['supplier','Tedarikçi'],
+      ] as const;
+      for (const [key, label] of need) {
+        const rule = req?.[key];
+        const visible = rule?.visible !== false;
+        const required = rule?.required === true;
+        if (visible && required) {
+          const val = (labelData as any)[key];
+          if (!val) missing.push(label as string);
+        }
+      }
+    }
+    if (missing.length > 0) {
+      showToast.error(`Zorunlu alanlar boş: ${missing.join(', ')}`);
+      return;
+    }
     if (!zplCode) {
       alert('Önce ZPL kodunu oluşturun.');
       return;
@@ -879,6 +955,35 @@ const LabelGenerator: React.FC = () => {
   // Ekstra yazıcı yöntemleri kaldırıldı
 
   const downloadZPL = () => {
+    // Zorunlu alan kontrolü: görünür ve zorunlu olanlarda değer olmalı
+    const req = labelTypeFields as any;
+    const missing: string[] = [];
+    if (req) {
+      const need = [
+        ['productName','Ürün Adı'],
+        ['barcode','Barkod'],
+        ['serialNumber','Seri No'],
+        ['entryDate','Giriş Tarihi'],
+        ['expiryDate','Son Kullanma Tarihi'],
+        ['amount','Miktar'],
+        ['invoiceNumber','İrsaliye No'],
+        ['batchNumber','Parti No'],
+        ['supplier','Tedarikçi'],
+      ] as const;
+      for (const [key, label] of need) {
+        const rule = req?.[key];
+        const visible = rule?.visible !== false;
+        const required = rule?.required === true;
+        if (visible && required) {
+          const val = (labelData as any)[key];
+          if (!val) missing.push(label as string);
+        }
+      }
+    }
+    if (missing.length > 0) {
+      showToast.error(`Zorunlu alanlar boş: ${missing.join(', ')}`);
+      return;
+    }
     if (zplCode) {
       const blob = new Blob([zplCode], { type: 'text/plain' });
       const url = URL.createObjectURL(blob);
@@ -891,6 +996,17 @@ const LabelGenerator: React.FC = () => {
       URL.revokeObjectURL(url);
     }
   };
+
+  if (initialLoading) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3 text-gray-600">
+          <div className="w-10 h-10 border-4 border-gray-300 border-t-blue-600 rounded-full animate-spin" />
+          <div className="text-sm">Yükleniyor…</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -919,8 +1035,10 @@ const LabelGenerator: React.FC = () => {
           <StandardForm
             labelType={labelType}
             setLabelType={setLabelType}
+            labelTypeOptions={labelTypeOptions}
             labelData={labelData}
             setLabelData={setLabelData}
+            fieldsConfig={labelTypeFields ?? undefined}
             templateName={templateName}
             setTemplateName={setTemplateName}
             saving={saving}
@@ -964,33 +1082,33 @@ const LabelGenerator: React.FC = () => {
               <div>
                 <div className="text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">Şablon</div>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <input
-                    type="text"
-                    value={templateName}
-                    onChange={(e)=>setTemplateName(e.target.value)}
+              <input
+                type="text"
+                value={templateName}
+                onChange={(e)=>setTemplateName(e.target.value)}
                     placeholder="Şablon adı"
-                    className="w-44 p-2 text-sm border border-gray-300 rounded"
-                  />
+                className="w-44 p-2 text-sm border border-gray-300 rounded"
+              />
                   <button
                     onClick={()=>{ setShowPreview(true); setShowSaveDialog(true); }}
                     disabled={saving || (!isDirty && !currentTemplateId)}
                     className={`px-3 py-1.5 text-sm text-white rounded ${currentTemplateId ? 'bg-emerald-600' : 'bg-indigo-600'} disabled:opacity-50`}
                   >{currentTemplateId ? 'Güncelle' : 'Kaydet'}</button>
-                  <button
-                    type="button"
-                    className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded"
-                    onClick={() => {
-                      setCurrentTemplateId(null);
+              <button
+                type="button"
+                className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded"
+                onClick={() => {
+                  setCurrentTemplateId(null);
                       setTemplateName(n => (n ? `${n} (Kopya)` : 'Yeni Taslak'));
                       setShowPreview(true);
-                      setShowSaveDialog(true);
-                    }}
-                  >Yeni Kaydet</button>
-                  <button type="button" onClick={()=>setShowTemplateModal(true)} className="px-3 py-1.5 text-sm bg-gray-700 text-white rounded">Şablonlar</button>
+                  setShowSaveDialog(true);
+                }}
+              >Yeni Kaydet</button>
+              <button type="button" onClick={()=>setShowTemplateModal(true)} className="px-3 py-1.5 text-sm bg-gray-700 text-white rounded">Şablonlar</button>
                 </div>
-              </div>
+            </div>
               {/* Öğe ekleme */}
-              <div>
+            <div>
                 <div className="text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">Öğe Ekle</div>
                 <div className="grid grid-cols-3 gap-2">
                   <button type="button" className="flex items-center justify-center gap-2 px-2 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>{ setFreeEditContext('preview'); setEditingFreeId(null); setFreeDraft({ type:'text', text:'Yeni Metin', fontMm:4, wrapWidthMm:60, x:6, y:6 }); setShowFreeDialog(true); }}>
@@ -1020,8 +1138,8 @@ const LabelGenerator: React.FC = () => {
                     <div className="w-4 h-4 rounded-full border-2 border-gray-700" />
                     <span className="text-sm">Çember</span>
                   </button>
-                </div>
-              </div>
+            </div>
+            </div>
 
               {/* Yakınlaştırma ve Izgara */}
               <div>
@@ -1031,7 +1149,7 @@ const LabelGenerator: React.FC = () => {
                   <input type="range" min={0.5} max={3} step={0.1} value={zoom} onChange={(e)=>setZoom(Number(e.target.value))} className="flex-1" />
                   <button type="button" className="px-2 py-1 rounded border" onClick={()=>setZoom(z=>Math.min(3, Number((z+0.1).toFixed(2))))}><ZoomIn className="w-4 h-4"/></button>
                   <span className="w-10 text-right text-sm">{Math.round(zoom*100)}%</span>
-                </div>
+              </div>
                 <div className="flex items-center gap-3 text-sm">
                   <label className="inline-flex items-center gap-2">
                     <input type="checkbox" checked={showGrid} onChange={(e)=>setShowGrid(e.target.checked)} /> Izgarayı Göster
@@ -1043,8 +1161,8 @@ const LabelGenerator: React.FC = () => {
                     <span>Izgara (mm)</span>
                     <input type="number" min={1} step={0.5} value={gridMm} onChange={(e)=>setGridMm(Math.max(0.5, Number(e.target.value)))} className="w-16 p-1 border rounded" />
                   </label>
-                </div>
               </div>
+            </div>
 
               {/* Öğeler listesi ve katman kontrolü (modüler) */}
               <FreeItemsPanel
@@ -1061,9 +1179,9 @@ const LabelGenerator: React.FC = () => {
                 <button onClick={generateZPL} className="flex items-center justify-center gap-2 px-3 py-1.5 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700"><QrCode className="w-4 h-4"/>ZPL Oluştur</button>
                 <button onClick={downloadZPL} disabled={!zplCode} className="flex items-center justify-center gap-2 px-3 py-1.5 bg-gray-700 text-white text-sm rounded-md hover:bg-gray-800 disabled:bg-gray-300 disabled:cursor-not-allowed"><Download className="w-4 h-4"/>ZPL İndir</button>
                 <button onClick={printLabel} disabled={!zplCode} className="flex items-center justify-center gap-2 px-3 py-1.5 bg-green-600 text-white text-sm rounded-md hover:bg-green-700 disabled:bg-green-300 disabled:cursor-not-allowed"><Printer className="w-4 h-4"/>Yazdır</button>
-              </div>
             </div>
-          </div>
+            </div>
+            </div>
         )}
 
         {/* Preview */}
@@ -1073,8 +1191,14 @@ const LabelGenerator: React.FC = () => {
             
             {/* Action Buttons */}
             <div className="flex gap-2 flex-wrap items-center justify-end">
-            {/* Düzenleme Modu */}
             <button
+                type="button"
+                onClick={()=>setShowLabelSettings(true)}
+                className="px-3 py-1.5 text-sm rounded-md border bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
+                title="Etiket Ayarları"
+              >Etiket Ayarları</button>
+            {/* Düzenleme Modu */}
+              <button
                 type="button"
                 onClick={() => setEditMode(v=>!v)}
                 className={`px-3 py-1.5 text-sm rounded-md border ${editMode ? 'bg-amber-100 border-amber-300 text-amber-800' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'}`}
@@ -1105,6 +1229,7 @@ const LabelGenerator: React.FC = () => {
           </div>
 
         {/* Canvas Preview + Drag Anchors */}
+          {labelType && (
           <PreviewCanvas
             canvasRef={canvasRef}
             overlayRef={overlayRef}
@@ -1117,10 +1242,12 @@ const LabelGenerator: React.FC = () => {
             activeTab={activeTab}
             editMode={editMode}
             visible={visible}
+            effectiveVisible={effectiveVisible}
             anchors={anchors}
             styles={styles}
             freeItems={freeItems}
             selectedFreeId={selectedFreeId}
+            freeMode={freeMode}
             setDragKey={setDragKey}
             setDraggingAnchorKey={setDraggingAnchorKey}
             setDragOffset={setDragOffset}
@@ -1135,16 +1262,50 @@ const LabelGenerator: React.FC = () => {
             setRemoveTarget={setRemoveTarget}
             setRemoveFreeId={setRemoveFreeId}
             setResizingFreeIdGlobal={setResizingFreeIdGlobal}
-          />
-          <div className="flex items-center justify-between mt-2 gap-3 flex-wrap">
-            <div className="flex items-center gap-2 text-sm">
-              <span>Yakınlaştır:</span>
-              <button type="button" className="px-2 py-1 bg-gray-200 rounded hover:bg-gray-300" onClick={()=>setZoom(z=>Math.max(0.5, Number((z-0.1).toFixed(2))))}>-</button>
-              <input type="range" min={0.5} max={3} step={0.1} value={zoom} onChange={(e)=>setZoom(Number(e.target.value))} />
-              <button type="button" className="px-2 py-1 bg-gray-200 rounded hover:bg-gray-300" onClick={()=>setZoom(z=>Math.min(3, Number((z+0.1).toFixed(2))))}>+</button>
-              <span className="w-10 text-right">{Math.round(zoom*100)}%</span>
-            </div>
-          </div>
+          />)}
+          {activeTab==='standart' && (
+            <div className="mt-3">
+              <div className="text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">Öğe Ekle</div>
+              <div className="grid grid-cols-3 gap-2">
+                <button type="button" className="flex items-center justify-center gap-2 px-2 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>{ setFreeMode(true); setFreeEditContext('preview'); setEditingFreeId(null); setFreeDraft({ type:'text', text:'Yeni Metin', fontMm:4, wrapWidthMm:60, x:6, y:6 }); setShowFreeDialog(true); }}>
+                  <Type className="w-4 h-4" />
+                  <span className="text-sm">Metin</span>
+                </button>
+                <button type="button" className="flex items-center justify-center gap-2 px-2 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>{ setFreeMode(true); setFreeEditContext('preview'); setEditingFreeId(null); setFreeDraft({ type:'barcode', text:'5901234123457', widthMm:60, heightMm:12, x:6, y:20 }); setShowFreeDialog(true); }}>
+                  <BarcodeIcon className="w-4 h-4" />
+                  <span className="text-sm">Barkod</span>
+                </button>
+                <>
+                  <input ref={imageInputRef} type="file" accept="image/*" className="hidden" onChange={(e)=>{ const f=e.target.files?.[0]; if(!f) return; const r=new FileReader(); r.onload=()=>{ setFreeMode(true); setFreeEditContext('preview'); setEditingFreeId(null); setFreeDraft({ type:'image', src:String(r.result), widthMm:30, heightMm:12, x:6, y:10 }); setShowFreeDialog(true); }; r.readAsDataURL(f); e.currentTarget.value=''; }} />
+                  <button type="button" className="flex items-center justify-center gap-2 px-2 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>imageInputRef.current?.click()}>
+                    <ImageIcon className="w-4 h-4" />
+                    <span className="text-sm">Görsel</span>
+                  </button>
+                </>
+                <button type="button" className="flex items-center justify-center gap-2 px-2 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>{ setFreeMode(true); setFreeEditContext('preview'); setEditingFreeId(null); setFreeDraft({ type:'line', widthMm:40, heightMm:0.6, x:6, y:30 }); setShowFreeDialog(true); }}>
+                  <div className="w-5 h-5 border-t-2 border-gray-700" />
+                  <span className="text-sm">Çizgi</span>
+                </button>
+                <button type="button" className="flex items-center justify-center gap-2 px-2 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>{ setFreeMode(true); setFreeEditContext('preview'); setEditingFreeId(null); setFreeDraft({ type:'circle', widthMm:12, heightMm:12, x:6, y:36 }); setShowFreeDialog(true); }}>
+                  <div className="w-4 h-4 rounded-full bg-gray-700" />
+                  <span className="text-sm">Daire</span>
+                </button>
+                <button type="button" className="flex items-center justify-center gap-2 px-2 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>{ setFreeMode(true); setFreeEditContext('preview'); setEditingFreeId(null); setFreeDraft({ type:'ring', widthMm:12, heightMm:12, x:20, y:36 }); setShowFreeDialog(true); }}>
+                  <div className="w-4 h-4 rounded-full border-2 border-gray-700" />
+                  <span className="text-sm">Çember</span>
+                </button>
+                    </div>
+                </div>
+              )}
+            <div className="flex items-center justify-between mt-2 gap-3 flex-wrap">
+              <div className="flex items-center gap-2 text-sm">
+                <span>Yakınlaştır:</span>
+                <button type="button" className="px-2 py-1 bg-gray-200 rounded hover:bg-gray-300" onClick={()=>setZoom(z=>Math.max(0.5, Number((z-0.1).toFixed(2))))}>-</button>
+                <input type="range" min={0.5} max={3} step={0.1} value={zoom} onChange={(e)=>setZoom(Number(e.target.value))} />
+                <button type="button" className="px-2 py-1 bg-gray-200 rounded hover:bg-gray-300" onClick={()=>setZoom(z=>Math.min(3, Number((z+0.1).toFixed(2))))}>+</button>
+                <span className="w-10 text-right">{Math.round(zoom*100)}%</span>
+              </div>
+              </div>
 
           {/* ZPL Code Display */}
           {zplCode && (
@@ -1162,6 +1323,9 @@ const LabelGenerator: React.FC = () => {
           </div>
 
         {/* Şablon Modalı */}
+        {showLabelSettings && (
+          <LabelSettingsModal open={showLabelSettings} onClose={()=>setShowLabelSettings(false)} />
+        )}
         {showTemplateModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center">
             <div className="absolute inset-0 bg-black/40" onClick={()=>setShowTemplateModal(false)} />
@@ -1172,10 +1336,23 @@ const LabelGenerator: React.FC = () => {
         </div>
               <div className="mb-3 flex items-center gap-2">
                 <input value={templateSearch} onChange={(e)=>setTemplateSearch(e.target.value)} placeholder="Ara..." className="flex-1 p-2 border rounded" />
+                <select value={templateTypeFilter} onChange={(e)=>setTemplateTypeFilter(e.target.value)} className="p-2 border rounded">
+                  <option value="Hepsi">Tüm Türler</option>
+                  {labelTypeOptions.map((opt)=> (
+                    <option key={opt} value={opt}>{opt}</option>
+                  ))}
+                  <option value="Geçersiz">Geçersiz Türler</option>
+                </select>
                 <button onClick={fetchTemplates} className="px-3 py-1.5 text-sm bg-gray-700 text-white rounded">Yenile</button>
               </div>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-3 max-h-[60vh] overflow-auto">
-                {templates.filter(t=> t.name.toLowerCase().includes(templateSearch.toLowerCase())).map(t => (
+                {templates.filter(t=> {
+                    const type = (t as any).data?.labelType || '';
+                    const valid = labelTypeOptions.includes(type);
+                    const matchText = t.name.toLowerCase().includes(templateSearch.toLowerCase());
+                    const matchType = templateTypeFilter==='Hepsi' ? true : (templateTypeFilter==='Geçersiz' ? !valid : type===templateTypeFilter);
+                    return matchText && matchType;
+                  }).map(t => (
                   <div key={t.id} className="relative border rounded-md p-2 hover:shadow cursor-pointer group" onClick={()=>{loadTemplate(t.id); setShowTemplateModal(false);}}>
                     <button
                       className="absolute right-1 top-1 p-1 rounded bg-red-600 text-white opacity-0 group-hover:opacity-100"
@@ -1185,6 +1362,15 @@ const LabelGenerator: React.FC = () => {
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
+                    {/* Tür Badgesi */}
+                    {(() => {
+                      const type = (t as any).data?.labelType || '';
+                      const isFree = (t as any).is_free === true;
+                      const text = isFree ? 'Serbest Etiket' : (labelTypeOptions.includes(type) ? type : '');
+                      return text ? (
+                        <div className="absolute left-1 top-1 px-2 py-0.5 text-[10px] rounded bg-gray-800 text-white opacity-80">{text}</div>
+                      ) : null;
+                    })()}
                     {t.thumbnail ? (
                       <img src={t.thumbnail} alt={t.name} className="w-full h-28 object-contain bg-gray-50 rounded" />
                     ) : (

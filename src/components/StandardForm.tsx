@@ -1,4 +1,5 @@
 import React from 'react';
+import TypePicker from './TypePicker';
 
 type LabelData = {
   productName: string;
@@ -25,6 +26,7 @@ interface Styles {
 interface StandardFormProps {
   labelType: string;
   setLabelType: (v: string) => void;
+  labelTypeOptions: string[];
   labelData: LabelData;
   setLabelData: (v: LabelData) => void;
 
@@ -59,6 +61,8 @@ interface StandardFormProps {
   setStyles: (v: Styles) => void;
 
   validateEan13: (input?: string) => { normalized: string | null; error?: string; checksum?: number };
+  // Etiket türüne bağlı alan görünürlüğü
+  fieldsConfig?: Record<string, { visible: boolean; required: boolean }> | null;
 }
 
 const StandardForm: React.FC<StandardFormProps> = ({
@@ -93,7 +97,14 @@ const StandardForm: React.FC<StandardFormProps> = ({
   styles,
   setStyles,
   validateEan13,
+  fieldsConfig,
+  labelTypeOptions,
 }) => {
+  const isVisible = (key: keyof LabelData): boolean => {
+    if (!fieldsConfig) return false;
+    const f = fieldsConfig[key as string];
+    return f ? f.visible !== false : true;
+  };
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-6">
       <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
@@ -123,19 +134,11 @@ const StandardForm: React.FC<StandardFormProps> = ({
       {/* Etiket Türü Seçimi */}
       <div className="mb-4">
         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Etiket Türü</label>
-        <select
-          value={labelType}
-          onChange={e => setLabelType(e.target.value)}
-          className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-        >
-          <option value="Koli etiketi">Koli etiketi</option>
-          <option value="Numune Etiketi">Numune Etiketi</option>
-          <option value="Yarı Mamül Etiketi">Yarı Mamül Etiketi</option>
-        </select>
+        <TypePicker options={labelTypeOptions} value={labelType} onChange={setLabelType} />
       </div>
 
       <div className="space-y-4">
-        <div>
+        {isVisible('productName') && (<div>
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Ürün Adı</label>
           <input
             type="text"
@@ -144,9 +147,9 @@ const StandardForm: React.FC<StandardFormProps> = ({
             className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             placeholder="Örn: Zeytinyağlı Kastil Sabunu"
           />
-        </div>
+        </div>)}
 
-        <div>
+        {isVisible('barcode') && (<div>
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Barkod (EAN-13)</label>
           <input
             type="text"
@@ -156,10 +159,10 @@ const StandardForm: React.FC<StandardFormProps> = ({
             placeholder="5901234123457"
           />
           {(() => { const r = validateEan13(labelData.barcode); if (!labelData.barcode) return <p className="text-xs text-gray-500 mt-1">12 haneli girerseniz son haneyi otomatik hesaplarız</p>; if (r.error) return <p className="text-xs mt-1 text-red-600">{r.error}</p>; return <p className="text-xs mt-1 text-emerald-600">Geçerli EAN-13 ✓ (Checksum: {r.checksum})</p>; })()}
-        </div>
+        </div>)}
 
-        <div className="grid grid-cols-2 gap-4">
-          <div>
+            <div className="grid grid-cols-2 gap-4">
+              {isVisible('serialNumber') && (<div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Seri No</label>
             <input
               type="text"
@@ -168,8 +171,8 @@ const StandardForm: React.FC<StandardFormProps> = ({
               className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               placeholder="ZKS-2024-001"
             />
-          </div>
-          <div>
+              </div>)}
+              {isVisible('batchNumber') && (<div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Parti No</label>
             <input
               type="text"
@@ -178,11 +181,11 @@ const StandardForm: React.FC<StandardFormProps> = ({
               className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               placeholder="BATCH-001"
             />
-          </div>
+              </div>)}
         </div>
 
         <div className="grid grid-cols-2 gap-4">
-          <div>
+          {isVisible('entryDate') && (<div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Giriş Tarihi</label>
             <input
               type="date"
@@ -190,8 +193,8 @@ const StandardForm: React.FC<StandardFormProps> = ({
               onChange={(e) => setLabelData({ ...labelData, entryDate: e.target.value })}
               className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
-          </div>
-          <div>
+          </div>)}
+          {isVisible('expiryDate') && (<div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Son Kullanma Tarihi</label>
             <input
               type="date"
@@ -199,10 +202,10 @@ const StandardForm: React.FC<StandardFormProps> = ({
               onChange={(e) => setLabelData({ ...labelData, expiryDate: e.target.value })}
               className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
-          </div>
+          </div>)}
         </div>
 
-        <div>
+        {isVisible('amount') && (<div>
           <label className="block text-sm font-medium text-gray-700 mb-1">Miktar</label>
           <input
             type="text"
@@ -211,9 +214,9 @@ const StandardForm: React.FC<StandardFormProps> = ({
             className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             placeholder="500 g"
           />
-        </div>
+        </div>)}
 
-        <div>
+        {isVisible('invoiceNumber') && (<div>
           <label className="block text-sm font-medium text-gray-700 mb-1">İrsaliye No</label>
           <input
             type="text"
@@ -222,9 +225,9 @@ const StandardForm: React.FC<StandardFormProps> = ({
             className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             placeholder="INV-2024-001"
           />
-        </div>
+        </div>)}
 
-        <div>
+        {isVisible('supplier') && (<div>
           <label className="block text-sm font-medium text-gray-700 mb-1">Tedarikçi</label>
           <input
             type="text"
@@ -233,9 +236,9 @@ const StandardForm: React.FC<StandardFormProps> = ({
             className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             placeholder="Akdeniz Gıda"
           />
-        </div>
+        </div>)}
 
-        <div>
+        {isVisible('logo') && (<div>
           <label className="block text-sm font-medium text-gray-700 mb-1">Şirket Logosu</label>
           <div className="flex items-center gap-2 flex-wrap">
             {companyLogos.map((l) => (
@@ -257,7 +260,7 @@ const StandardForm: React.FC<StandardFormProps> = ({
               <span className="text-sm text-gray-500">Supabase'de 'company_logo' tablosunda kayıt bulunamadı.</span>
             )}
           </div>
-        </div>
+        </div>)}
 
         {/* Gelişmiş Ayarlar Toggle */}
         <div className="border-t pt-4">

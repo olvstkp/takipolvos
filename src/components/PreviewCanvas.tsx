@@ -40,11 +40,13 @@ interface PreviewCanvasProps {
   editMode: boolean;
 
   visible: Record<AnchorKey, boolean>;
+  effectiveVisible: Record<AnchorKey, boolean>;
   anchors: Record<AnchorKey, Pos>;
   styles: ElementStyles;
 
   freeItems: FreeItem[];
   selectedFreeId: string | null;
+  freeMode?: boolean;
 
   setDragKey: (k: AnchorKey | null) => void;
   setDraggingAnchorKey: (k: AnchorKey | null) => void;
@@ -80,10 +82,14 @@ const PreviewCanvas: React.FC<PreviewCanvasProps> = (props) => {
     activeTab,
     editMode,
     visible,
+    effectiveVisible,
     anchors,
     styles,
     freeItems,
     selectedFreeId,
+    
+    // optional flags
+    freeMode,
     setDragKey,
     setDraggingAnchorKey,
     setDragOffset,
@@ -121,10 +127,10 @@ const PreviewCanvas: React.FC<PreviewCanvasProps> = (props) => {
         {editMode && (
           <div ref={overlayRef} className="absolute inset-4 pointer-events-none select-none z-10">
             {/* Standart şablon öğeleri (yalnızca Standart sekmesinde) */}
-            {activeTab==='standart' && (['title','productName','details','barcode'] as const).filter(k=>visible[k]).map((key) => (
+            {activeTab==='standart' && (['title','productName','details','barcode'] as const).filter(k=>effectiveVisible[k]).map((key) => (
               <div
                 key={key}
-                className="absolute bg-blue-500/10 border border-blue-500 text-[10px] text-blue-800 rounded pointer-events-auto z-20"
+                className="absolute bg-red-500/10 border border-red-500 text-[10px] text-red-700 rounded pointer-events-auto z-20"
                 style={{
                   left: `${anchors[key].x * 3.78 * zoom}px`,
                   top: `${anchors[key].y * 3.78 * zoom}px`,
@@ -187,8 +193,8 @@ const PreviewCanvas: React.FC<PreviewCanvasProps> = (props) => {
               </div>
             ))}
 
-            {/* Serbest mod öğeleri (sadece editMode'da görünür) */}
-            {activeTab==='serbest' && freeItems.map((item) => (
+            {/* Serbest öğeler: Serbest sekmede veya standartta freeMode aktifken */}
+            {(activeTab==='serbest' || freeMode) && freeItems.map((item) => (
               <div
                 key={item.id}
                 className={`absolute bg-purple-500/10 border border-purple-500 text-[10px] text-purple-800 rounded pointer-events-auto z-20 ${selectedFreeId===item.id ? 'ring-2 ring-purple-500' : ''}`}
