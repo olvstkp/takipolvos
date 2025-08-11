@@ -162,6 +162,7 @@ const LabelSettings: React.FC = () => {
           </div>
         </div>
       </div>
+      </div>
       <ConfirmDialog
         open={!!confirmDeleteId}
         title="Silme Onayı"
