@@ -45,6 +45,7 @@ const LabelGenerator: React.FC = () => {
   const [dpi, setDpi] = useState<203 | 300 | 600>(203);
   const [darkness, setDarkness] = useState<number>(2);
   const [zplDarkness, setZplDarkness] = useState<number>(30); // ^MD 0-30
+  const [printSpeed, setPrintSpeed] = useState<number>(4); // ^PR 1-14 (düşük= daha koyu)
   const [showAdvancedSettings, setShowAdvancedSettings] = useState<boolean>(false);
   const [zoom, setZoom] = useState<number>(() => {
     const saved = Number(localStorage.getItem('label_zoom') || '1');
@@ -403,6 +404,7 @@ const LabelGenerator: React.FC = () => {
     dpi,
     darkness,
     zplDarkness,
+    printSpeed,
     anchors,
     styles,
     selectedCompany,
@@ -426,6 +428,7 @@ const LabelGenerator: React.FC = () => {
     setDpi(s.dpi ?? dpi);
     setDarkness(s.darkness ?? darkness);
     setZplDarkness(s.zplDarkness ?? zplDarkness);
+    setPrintSpeed(s.printSpeed ?? printSpeed);
     setAnchors(s.anchors ?? anchors);
     setStyles(s.styles ?? styles);
     if (s.selectedCompany) setSelectedCompany(s.selectedCompany);
@@ -563,7 +566,7 @@ const LabelGenerator: React.FC = () => {
     const base = JSON.stringify(baselineState);
     setIsDirty(now !== base);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [labelData, labelType, labelWidth, labelHeight, dpi, darkness, zplDarkness, anchors, styles, selectedCompany, visible, freeMode, freeItems]);
+  }, [labelData, labelType, labelWidth, labelHeight, dpi, darkness, zplDarkness, printSpeed, anchors, styles, selectedCompany, visible, freeMode, freeItems]);
 
   // ZPL'i görsel olarak render et (raster baskı için canvas, DPI'ya göre gerçek boyut)
   const renderZPLPreview = () => {
@@ -828,14 +831,16 @@ const LabelGenerator: React.FC = () => {
   useEffect(() => {
       renderZPLPreview();
     try { generateZPL(); } catch {}
-  }, [labelData, labelType, labelWidth, labelHeight, showPreview, darkness, anchors, styles, visible, freeMode, freeItems, dpi, zplDarkness, activeTab, selectedCompany, logoImages]);
+  }, [labelData, labelType, labelWidth, labelHeight, showPreview, darkness, anchors, styles, visible, freeMode, freeItems, dpi, zplDarkness, printSpeed, activeTab, selectedCompany, logoImages]);
 
   const generateZPL = () => {
     const PW = mmToDots(labelWidth);
     const LL = mmToDots(labelHeight);
     const lines: string[] = [];
     lines.push('^XA');
+    lines.push('^CI28'); // UTF-8 / Türkçe karakter seti
     lines.push(`^MD${Math.min(30, Math.max(0, Math.round(zplDarkness)))}`);
+    lines.push(`^PR${Math.min(14, Math.max(1, Math.round(printSpeed)))}`); // Baskı hızı
     lines.push(`^PW${PW}`);
     lines.push(`^LL${LL}`);
     // Başlık: sadece şirket adı metin olarak (logo ZPL'e gömülmüyor)
@@ -1061,6 +1066,8 @@ const LabelGenerator: React.FC = () => {
             setDarkness={setDarkness}
             zplDarkness={zplDarkness}
             setZplDarkness={setZplDarkness}
+            printSpeed={printSpeed}
+            setPrintSpeed={setPrintSpeed}
             showAdvancedSettings={showAdvancedSettings}
             setShowAdvancedSettings={setShowAdvancedSettings}
             styles={styles}

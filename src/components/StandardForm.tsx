@@ -54,6 +54,10 @@ interface StandardFormProps {
   setDarkness: (v: number) => void;
   zplDarkness: number;
   setZplDarkness: (v: number) => void;
+  // Zebra hız
+  // 1-14 arası önerilir; düşük hız daha koyu baskı sağlar
+  printSpeed?: number;
+  setPrintSpeed?: (v: number) => void;
   showAdvancedSettings: boolean;
   setShowAdvancedSettings: (v: boolean) => void;
 
@@ -92,6 +96,8 @@ const StandardForm: React.FC<StandardFormProps> = ({
   setDarkness,
   zplDarkness,
   setZplDarkness,
+  printSpeed,
+  setPrintSpeed,
   showAdvancedSettings,
   setShowAdvancedSettings,
   styles,
@@ -321,6 +327,19 @@ const StandardForm: React.FC<StandardFormProps> = ({
                     <option value={300}>300 dpi</option>
                     <option value={600}>600 dpi</option>
                   </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Yazıcı Hızı (^PR)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={14}
+                    step={1}
+                    value={printSpeed ?? 4}
+                    onChange={(e) => setPrintSpeed && setPrintSpeed(Math.max(1, Math.min(14, Number(e.target.value))))}
+                    className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Daha düşük hız daha koyu ve net baskı verir.</p>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Koyuluk (Önizleme)</label>
