@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import LabelSettingsModal from '../components/LabelSettingsModal';
 import { Printer, QrCode, Download, Type, Barcode as BarcodeIcon, Image as ImageIcon, ZoomIn, ZoomOut, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import FreeItemsPanel from '../components/FreeItemsPanel';
+import FreeItemsPanel, { FreeItem as FreeItemType, FreeItemType as FreeItemTypeEnum } from '../components/FreeItemsPanel';
 import PreviewCanvas from '../components/PreviewCanvas';
 import StandardForm from '../components/StandardForm';
 import { showToast } from '../utils/toast';
@@ -19,6 +19,7 @@ interface LabelData {
   supplier: string;
   logo: string;
   barcode?: string; // EAN-13
+  customFields?: Record<string, string | number | boolean>;
 }
 
 const LabelGenerator: React.FC = () => {
@@ -37,6 +38,7 @@ const LabelGenerator: React.FC = () => {
 
   const [labelType, setLabelType] = useState<string>('');
   const [labelTypeFields, setLabelTypeFields] = useState<any | null>(null);
+  const [labelTypeCustomFields, setLabelTypeCustomFields] = useState<any[]>([]);
   const [labelTypeOptions, setLabelTypeOptions] = useState<string[]>([]);
   // Etiket boyutu (mm) - 104 x 50.8 mm
   const [labelWidth, setLabelWidth] = useState<number>(104);
@@ -143,7 +145,7 @@ const LabelGenerator: React.FC = () => {
   const [draggingAnchorKey, setDraggingAnchorKey] = useState<AnchorKey | null>(null);
   const [draggingFreeId, setDraggingFreeId] = useState<string | null>(null);
   const [dragOffset, setDragOffset] = useState<{dx:number; dy:number}>({ dx: 0, dy: 0 });
-  const [resizingKey, setResizingKey] = useState<AnchorKey | null>(null);
+
   const [resizeStart, setResizeStart] = useState<{x0:number; y0:number; wMm:number; hMm:number; productFont:number; productWrap:number; titleFont:number; detailsGap:number; detailsFont:number; bcHeight:number; bcScale:number}>({ x0:0, y0:0, wMm:0, hMm:0, productFont:0, productWrap:0, titleFont:0, detailsGap:0, detailsFont:0, bcHeight:0, bcScale:1 });
   // Global resize hedefleri
   const [resizingAnchorKeyGlobal, setResizingAnchorKeyGlobal] = useState<AnchorKey | null>(null);
@@ -213,30 +215,19 @@ const LabelGenerator: React.FC = () => {
   }, [visible, labelTypeFields, labelType]);
 
   // Serbest Mod öğeleri
-  type FreeItemType = 'text' | 'barcode' | 'image' | 'line' | 'circle' | 'ring';
-  type FreeItem = {
-    id: string;
-    type: FreeItemType;
-    x: number; // mm
-    y: number; // mm
-    widthMm?: number; // barcode/image
-    heightMm?: number; // barcode/image
-    text?: string; // text/barcode digits
-    fontMm?: number; // text
-    wrapWidthMm?: number; // text
-    src?: string; // image data url
-    zIndex?: number; // katmanlama
-  };
+  // FreeItemType tipi import'tan geliyor
   // Çakışma önleme yardımcıları (serbest öğeler ve sabit anchorlar)
-  const getFreeItemBounds = (item: FreeItem) => {
+  const getFreeItemTypeBounds = (item: FreeItemType) => {
     const widthMm = (() => {
       if (item.type === 'text') return Math.max(10, item.wrapWidthMm || 60);
       if (item.type === 'line') return Math.max(5, item.widthMm || 40);
+      if (item.type === 'rectangle') return Math.max(5, item.widthMm || 20);
       return Math.max(10, item.widthMm || 40);
     })();
     const heightMm = (() => {
       if (item.type === 'text') return Math.max(4, (item.fontMm || 4) + 6);
       if (item.type === 'line') return Math.max(0.2, item.heightMm || 0.6);
+      if (item.type === 'rectangle') return Math.max(2, item.heightMm || 10);
       return Math.max(5, item.heightMm || 12);
     })();
     return { left: item.x, top: item.y, right: item.x + widthMm, bottom: item.y + heightMm };
@@ -261,24 +252,24 @@ const LabelGenerator: React.FC = () => {
     }
     return false;
   };
-  const overlapsFreeItemsRuntime = (rect: {left:number;top:number;right:number;bottom:number}, items: FreeItem[], ignoreId?: string) => {
+  const overlapsFreeItemsRuntime = (rect: {left:number;top:number;right:number;bottom:number}, items: FreeItemType[], ignoreId?: string) => {
     for (const it of items) {
       if (it.id === ignoreId) continue;
-      const r = getFreeItemBounds(it);
+      const r = getFreeItemTypeBounds(it);
       if (rectsOverlap(rect, r)) return true;
     }
     return false;
   };
   const [freeMode, setFreeMode] = useState<boolean>(false);
-  const [freeItems, setFreeItems] = useState<FreeItem[]>([]);
+  const [freeItems, setFreeItemTypes] = useState<FreeItemType[]>([]);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const freeImageCache = useRef<Record<string, HTMLImageElement>>({});
   const [showFreeDialog, setShowFreeDialog] = useState<boolean>(false);
-  const [freeDraft, setFreeDraft] = useState<Partial<FreeItem> & { type: FreeItemType } | null>(null);
+  const [freeDraft, setFreeDraft] = useState<Partial<FreeItemType> & { type: FreeItemTypeEnum } | null>(null);
   const [editingFreeId, setEditingFreeId] = useState<string | null>(null);
   const [freeEditContext, setFreeEditContext] = useState<'preview'|'workspace'>('preview');
   const [showFreeWorkspace, setShowFreeWorkspace] = useState<boolean>(false);
-  const [wsItems, setWsItems] = useState<FreeItem[]>([]);
+  const [wsItems, setWsItems] = useState<FreeItemType[]>([]);
   const wsCanvasRef = useRef<HTMLCanvasElement>(null);
   const wsContainerRef = useRef<HTMLDivElement>(null);
   const [wsZoom, setWsZoom] = useState<number>(1);
@@ -323,7 +314,7 @@ const LabelGenerator: React.FC = () => {
     if (!selectedFreeId) return;
     const mmStep = 1.5 * direction;
     const fontStep = 0.8 * direction;
-    setFreeItems(arr => arr.map(it => {
+    setFreeItemTypes(arr => arr.map(it => {
       if (it.id !== selectedFreeId) return it;
       if (it.type==='text') return { ...it, wrapWidthMm: Math.max(20, (it.wrapWidthMm||60) + mmStep*2), fontMm: Math.max(2, (it.fontMm||4) + fontStep) };
       if (it.type==='line') return { ...it, widthMm: Math.max(5, (it.widthMm||40) + mmStep*2), heightMm: Math.max(0.2, (it.heightMm||0.6) + fontStep/3) };
@@ -351,7 +342,7 @@ const LabelGenerator: React.FC = () => {
         let x = (e.clientX - parent.left - dragOffset.dx) / base;
         let y = (e.clientY - parent.top - dragOffset.dy) / base;
         if (snapToGrid) { const g = gridMm; x = Math.round(x/g)*g; y = Math.round(y/g)*g; }
-        setFreeItems(arr => arr.map(it => it.id===draggingFreeId ? { ...it, x: Math.max(0, Math.min(labelWidth-5, x)), y: Math.max(0, Math.min(labelHeight-5, y)) } : it));
+        setFreeItemTypes(arr => arr.map(it => it.id===draggingFreeId ? { ...it, x: Math.max(0, Math.min(labelWidth-5, x)), y: Math.max(0, Math.min(labelHeight-5, y)) } : it));
       } else if (resizingAnchorKeyGlobal) {
         const key = resizingAnchorKeyGlobal;
         // hedef delta
@@ -386,7 +377,7 @@ const LabelGenerator: React.FC = () => {
         resizeDeltaRef.current.dy = resizeDeltaRef.current.dy + (targetDy - resizeDeltaRef.current.dy) * RESIZE_SMOOTH;
         const dxMm = resizeDeltaRef.current.dx;
         const dyMm = resizeDeltaRef.current.dy;
-        setFreeItems(arr => arr.map(it => {
+        setFreeItemTypes(arr => arr.map(it => {
           if (it.id !== resizingFreeIdGlobal) return it;
           if (it.type==='text') {
             // Metin: genişlik wrapWidthMm, yükseklik fontMm; font büyürken satır yüksekliği render tarafında fonta bağlı
@@ -474,7 +465,7 @@ const LabelGenerator: React.FC = () => {
     setWsItems(freeItems);
     // Küçük önizlemeyi de eşitle (serbest öğeler görünür olsun)
     setFreeMode(true);
-    setFreeItems(() => [...freeItems]);
+    setFreeItemTypes(() => [...freeItems]);
     setTimeout(() => { try { renderZPLPreview(); generateZPL(); } catch {} }, 0);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showFreeWorkspace]);
@@ -499,13 +490,13 @@ const LabelGenerator: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'standart' | 'serbest'>('standart');
 
   // Katman yardımcıları
-  const normalizeZ = (items: FreeItem[]): FreeItem[] => {
+  const normalizeZ = (items: FreeItemType[]): FreeItemType[] => {
     const sorted = [...items].sort((a,b)=> (a.zIndex||0) - (b.zIndex||0));
     return sorted.map((it, idx) => ({ ...it, zIndex: idx }));
   };
-  const getMaxZ = (items: FreeItem[]) => items.reduce((m, it)=> Math.max(m, it.zIndex ?? 0), -1);
+  const getMaxZ = (items: FreeItemType[]) => items.reduce((m, it)=> Math.max(m, it.zIndex ?? 0), -1);
   const moveLayer = (id: string, direction: 'up' | 'down') => {
-    setFreeItems(items => {
+    setFreeItemTypes(items => {
       if (items.length <= 1) return items;
       const sorted = [...items].sort((a,b)=> (a.zIndex||0) - (b.zIndex||0)); // bottom -> top
       const idx = sorted.findIndex(it => it.id === id);
@@ -526,7 +517,7 @@ const LabelGenerator: React.FC = () => {
   };
   // Liste sürükle-bırak (katman sırası)
   const reorderLayers = (dragId: string, dropId: string) => {
-    setFreeItems(items => {
+    setFreeItemTypes(items => {
       if (dragId === dropId) return items;
       const desc = [...items].sort((a,b)=> (b.zIndex||0)-(a.zIndex||0)); // top -> bottom
       const from = desc.findIndex(i=>i.id===dragId);
@@ -582,6 +573,7 @@ const LabelGenerator: React.FC = () => {
     visible,
     freeMode,
     freeItems,
+    customFields: labelTypeCustomFields,
   });
 
   // İlk 3 saniyelik yükleniyor sekmesi
@@ -605,7 +597,8 @@ const LabelGenerator: React.FC = () => {
     if (s.selectedCompany) setSelectedCompany(s.selectedCompany);
     if (s.visible) setVisible({ ...defaultVisibility, ...s.visible });
     if (s.freeMode !== undefined) setFreeMode(!!s.freeMode);
-    if (s.freeItems) setFreeItems(s.freeItems as FreeItem[]);
+    if (s.freeItems) setFreeItemTypes(s.freeItems as FreeItemType[]);
+    if (s.customFields) setLabelTypeCustomFields(s.customFields);
   };
 
   const fetchTemplates = async () => {
@@ -628,20 +621,23 @@ const LabelGenerator: React.FC = () => {
           setLabelTypeOptions(list.map((r: any)=> r.name));
           // Otomatik seçim istemiyoruz; kullanıcı seçecek
         }
-        if (!labelType) { setLabelTypeFields(null); return; }
-        const { data } = await supabase.from('label_types').select('fields, anchors').eq('name', labelType).maybeSingle();
+        if (!labelType) { setLabelTypeFields(null); setLabelTypeCustomFields([]); return; }
+        const { data } = await supabase.from('label_types').select('fields, anchors, custom_fields').eq('name', labelType).maybeSingle();
         if (data?.fields) setLabelTypeFields(data.fields);
+        if (data?.custom_fields) setLabelTypeCustomFields(data.custom_fields);
         else {
           // Supabase kaydı yoksa local defaultlara düş
           try {
             const { DEFAULT_LABEL_TYPES } = await import('../lib/label_settings');
             const def = DEFAULT_LABEL_TYPES.find(t => t.name === labelType);
             setLabelTypeFields(def?.fields || null);
+            setLabelTypeCustomFields(def?.custom_fields || []);
             if (!list || list.length === 0) {
               setLabelTypeOptions(DEFAULT_LABEL_TYPES.map(t=>t.name));
             }
           } catch {
             setLabelTypeFields(null);
+            setLabelTypeCustomFields([]);
           }
         }
         // Anchor’ları uygula (DB öncelikli, yoksa default)
@@ -654,7 +650,7 @@ const LabelGenerator: React.FC = () => {
             if (def?.anchors) setAnchors(a=> ({ ...a, ...def.anchors! }));
           } catch {}
         }
-      } catch { setLabelTypeFields(null); }
+      } catch { setLabelTypeFields(null); setLabelTypeCustomFields([]); }
     };
     loadType();
   }, [labelType]);
@@ -913,6 +909,24 @@ const LabelGenerator: React.FC = () => {
           addLine(labelData.entryDate ? `Giriş: ${labelData.entryDate}` : '');
           addLine(labelData.expiryDate ? `SKT: ${labelData.expiryDate}` : '');
           addLine(labelData.supplier ? `Tedarikçi: ${labelData.supplier}` : '');
+          
+          // Custom fields
+          if (labelTypeCustomFields && labelData.customFields) {
+            labelTypeCustomFields
+              .filter(field => field.visible)
+              .forEach(field => {
+                const value = labelData.customFields?.[field.name];
+                if (value !== undefined && value !== null && value !== '') {
+                  let displayValue = String(value);
+                  if (field.type === 'boolean') {
+                    displayValue = value ? 'Evet' : 'Hayır';
+                  } else if (field.type === 'date' && value) {
+                    displayValue = new Date(String(value)).toLocaleDateString('tr-TR');
+                  }
+                  addLine(`${field.label}: ${displayValue}`);
+                }
+              });
+          }
         }
 
       // Barkod
@@ -972,7 +986,7 @@ const LabelGenerator: React.FC = () => {
               const cx = mmToPx(item.x) + rx; const cy = mmToPx(item.y) + ry;
               ctx.beginPath();
               ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI*2);
-              ctx.fillStyle = '#000';
+              ctx.fillStyle = item.color || '#000';
               ctx.fill();
             } else if (item.type === 'ring') {
               const w = item.widthMm || 12; const h = item.heightMm || 12;
@@ -981,8 +995,20 @@ const LabelGenerator: React.FC = () => {
               ctx.beginPath();
               ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI*2);
               ctx.lineWidth = Math.max(1, Math.floor(mmToPx(0.6)));
-              ctx.strokeStyle = '#000';
+              ctx.strokeStyle = item.color || '#000';
               ctx.stroke();
+            } else if (item.type === 'rectangle') {
+              const w = item.widthMm || 20; const h = item.heightMm || 10;
+              // Beyaz dikdörtgen için silgi etkisi - altındaki her şeyi siler
+              if (item.color === '#FFFFFF' || item.color === '#ffffff') {
+                ctx.globalCompositeOperation = 'destination-out';
+                ctx.fillStyle = '#000'; // Renk önemli değil, silme operasyonu
+              } else {
+                ctx.fillStyle = item.color || '#000';
+              }
+              ctx.fillRect(mmToPx(item.x), mmToPx(item.y), mmToPx(w), mmToPx(h));
+              // Blend mode'u geri al
+              ctx.globalCompositeOperation = 'source-over';
             }
           }
     }
@@ -1040,6 +1066,24 @@ const LabelGenerator: React.FC = () => {
       pushDetail(labelData.entryDate, 'Giriş');
       pushDetail(labelData.expiryDate, 'SKT');
       pushDetail(labelData.supplier, 'Tedarikçi');
+      
+      // Custom fields
+      if (labelTypeCustomFields && labelData.customFields) {
+        labelTypeCustomFields
+          .filter(field => field.visible)
+          .forEach(field => {
+            const value = labelData.customFields?.[field.name];
+            if (value !== undefined && value !== null && value !== '') {
+              let displayValue = String(value);
+              if (field.type === 'boolean') {
+                displayValue = value ? 'Evet' : 'Hayır';
+              } else if (field.type === 'date' && value) {
+                displayValue = new Date(String(value)).toLocaleDateString('tr-TR');
+              }
+              pushDetail(displayValue, field.label);
+            }
+          });
+      }
     }
     // Barkod
     const ean = labelData.barcode ? labelData.barcode.replace(/\D/g,'') : '';
@@ -1076,6 +1120,18 @@ const LabelGenerator: React.FC = () => {
           const val = (labelData as any)[key];
           if (!val) missing.push(label as string);
         }
+      }
+      
+      // Custom field kontrolü
+      if (labelTypeCustomFields) {
+        labelTypeCustomFields
+          .filter(field => field.visible && field.required)
+          .forEach(field => {
+            const value = labelData.customFields?.[field.name];
+            if (!value || value === '') {
+              missing.push(field.label);
+            }
+          });
       }
     }
     if (missing.length > 0) {
@@ -1158,6 +1214,18 @@ const LabelGenerator: React.FC = () => {
           if (!val) missing.push(label as string);
         }
       }
+      
+      // Custom field kontrolü
+      if (labelTypeCustomFields) {
+        labelTypeCustomFields
+          .filter(field => field.visible && field.required)
+          .forEach(field => {
+            const value = labelData.customFields?.[field.name];
+            if (!value || value === '') {
+              missing.push(field.label);
+            }
+          });
+      }
     }
     if (missing.length > 0) {
       showToast.error(`Zorunlu alanlar boş: ${missing.join(', ')}`);
@@ -1218,6 +1286,7 @@ const LabelGenerator: React.FC = () => {
             labelData={labelData}
             setLabelData={setLabelData}
             fieldsConfig={labelTypeFields ?? undefined}
+            customFields={labelTypeCustomFields}
             templateName={templateName}
             setTemplateName={setTemplateName}
             saving={saving}
@@ -1255,7 +1324,7 @@ const LabelGenerator: React.FC = () => {
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">Serbest Etiket Araçları</h3>
             <div className="space-y-4" onKeyDown={(e)=>{
               if (e.key === 'Delete' && selectedFreeId) {
-                setFreeItems(items => items.filter(i => i.id !== selectedFreeId));
+                setFreeItemTypes(items => items.filter(i => i.id !== selectedFreeId));
                 setSelectedFreeId(null);
               }
             }} tabIndex={0}>
@@ -1292,7 +1361,7 @@ const LabelGenerator: React.FC = () => {
             <div>
                 <div className="text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">Öğe Ekle</div>
                 <div className="grid grid-cols-3 gap-2">
-                  <button type="button" className="flex items-center justify-center gap-2 px-2 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>{ setFreeEditContext('preview'); setEditingFreeId(null); setFreeDraft({ type:'text', text:'Yeni Metin', fontMm:4, wrapWidthMm:60, x:6, y:6 }); setShowFreeDialog(true); }}>
+                  <button type="button" className="flex items-center justify-center gap-2 px-2 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>{ setFreeEditContext('preview'); setEditingFreeId(null); setFreeDraft({ type:'text', text:'Yeni Metin', fontMm:4, wrapWidthMm:60, x:6, y:6, zIndex:5 }); setShowFreeDialog(true); }}>
                     <Type className="w-4 h-4" />
                     <span className="text-sm">Metin</span>
                   </button>
@@ -1318,6 +1387,10 @@ const LabelGenerator: React.FC = () => {
                   <button type="button" className="flex items-center justify-center gap-2 px-2 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>{ setFreeEditContext('preview'); setEditingFreeId(null); setFreeDraft({ type:'ring', widthMm:12, heightMm:12, x:20, y:36 }); setShowFreeDialog(true); }}>
                     <div className="w-4 h-4 rounded-full border-2 border-gray-700" />
                     <span className="text-sm">Çember</span>
+                  </button>
+                  <button type="button" className="flex items-center justify-center gap-2 px-2 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>{ setFreeEditContext('preview'); setEditingFreeId(null); setFreeDraft({ type:'rectangle', widthMm:20, heightMm:10, color:'#FFFFFF', x:6, y:42, zIndex:0 }); setShowFreeDialog(true); }}>
+                    <div className="w-4 h-3 bg-white border border-gray-700" />
+                    <span className="text-sm">Dikdörtgen</span>
                   </button>
             </div>
             </div>
@@ -1352,7 +1425,7 @@ const LabelGenerator: React.FC = () => {
                 onSelect={(id)=>setSelectedFreeId(id)}
                 onMoveLayer={moveLayer}
                 onReorder={reorderLayers}
-                onClear={()=>setFreeItems([])}
+                onClear={()=>setFreeItemTypes([])}
               />
 
               {/* Aksiyonlar */}
@@ -1385,6 +1458,22 @@ const LabelGenerator: React.FC = () => {
                   onClick={()=>adjustSelectedFreeSize(1)} 
                   title="Büyüt"
                 >＋</button>
+              </div>
+            )}
+            
+            {/* Seçili öge için katman kontrolü */}
+            {selectedFreeId && freeMode && (
+              <div className="flex gap-1 border border-gray-300 rounded-md">
+                <button 
+                  className="px-2 py-1 text-sm rounded-l-md bg-gray-50 hover:bg-gray-100" 
+                  onClick={()=>moveLayer(selectedFreeId, 'down')} 
+                  title="Arkaya Al"
+                >Alt</button>
+                <button 
+                  className="px-2 py-1 text-sm rounded-r-md bg-gray-50 hover:bg-gray-100" 
+                  onClick={()=>moveLayer(selectedFreeId, 'up')} 
+                  title="Öne Al"
+                >Üst</button>
               </div>
             )}
             <button
@@ -1452,7 +1541,7 @@ const LabelGenerator: React.FC = () => {
             setDragKey={setDragKey}
             setDraggingAnchorKey={setDraggingAnchorKey}
             setDragOffset={setDragOffset}
-            setResizingKey={setResizingKey}
+
             setResizingAnchorKeyGlobal={setResizingAnchorKeyGlobal}
             setResizeStart={setResizeStart}
             setDraggingFreeId={setDraggingFreeId}
@@ -1468,7 +1557,7 @@ const LabelGenerator: React.FC = () => {
             <div className="mt-3">
               <div className="text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">Öğe Ekle</div>
               <div className="grid grid-cols-3 gap-2">
-                <button type="button" className="flex items-center justify-center gap-2 px-2 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>{ setFreeMode(true); setFreeEditContext('preview'); setEditingFreeId(null); setFreeDraft({ type:'text', text:'Yeni Metin', fontMm:4, wrapWidthMm:60, x:6, y:6 }); setShowFreeDialog(true); }}>
+                <button type="button" className="flex items-center justify-center gap-2 px-2 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>{ setFreeMode(true); setFreeEditContext('preview'); setEditingFreeId(null); setFreeDraft({ type:'text', text:'Yeni Metin', fontMm:4, wrapWidthMm:60, x:6, y:6, zIndex:5 }); setShowFreeDialog(true); }}>
                   <Type className="w-4 h-4" />
                   <span className="text-sm">Metin</span>
                 </button>
@@ -1494,6 +1583,10 @@ const LabelGenerator: React.FC = () => {
                 <button type="button" className="flex items-center justify-center gap-2 px-2 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>{ setFreeMode(true); setFreeEditContext('preview'); setEditingFreeId(null); setFreeDraft({ type:'ring', widthMm:12, heightMm:12, x:20, y:36 }); setShowFreeDialog(true); }}>
                   <div className="w-4 h-4 rounded-full border-2 border-gray-700" />
                   <span className="text-sm">Çember</span>
+                </button>
+                <button type="button" className="flex items-center justify-center gap-2 px-2 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>{ setFreeMode(true); setFreeEditContext('preview'); setEditingFreeId(null); setFreeDraft({ type:'rectangle', widthMm:20, heightMm:10, color:'#FFFFFF', x:6, y:42, zIndex:0 }); setShowFreeDialog(true); }}>
+                  <div className="w-4 h-3 bg-white border border-gray-700" />
+                  <span className="text-sm">Dikdörtgen</span>
                 </button>
                     </div>
                 </div>
@@ -1638,6 +1731,10 @@ const LabelGenerator: React.FC = () => {
                         <input type="number" step={0.1} className="w-full p-2 border rounded" value={freeDraft.heightMm || 12} onChange={(e)=>setFreeDraft({...freeDraft, heightMm:Number(e.target.value)})} />
                       </div>
                     </div>
+                    <div>
+                      <label className="block text-sm mb-1">Renk</label>
+                      <input type="color" className="w-full h-10 border rounded" value={freeDraft.color || '#000000'} onChange={(e)=>setFreeDraft({...freeDraft, color:e.target.value})} />
+                    </div>
                   </>
                 )}
                 {(freeDraft.type === 'ring') && (
@@ -1651,6 +1748,28 @@ const LabelGenerator: React.FC = () => {
                         <label className="block text-sm mb-1">Yükseklik (mm)</label>
                         <input type="number" step={0.1} className="w-full p-2 border rounded" value={freeDraft.heightMm || 12} onChange={(e)=>setFreeDraft({...freeDraft, heightMm:Number(e.target.value)})} />
                       </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm mb-1">Renk</label>
+                      <input type="color" className="w-full h-10 border rounded" value={freeDraft.color || '#000000'} onChange={(e)=>setFreeDraft({...freeDraft, color:e.target.value})} />
+                    </div>
+                  </>
+                )}
+                {(freeDraft.type === 'rectangle') && (
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-sm mb-1">Genişlik (mm)</label>
+                        <input type="number" step={0.1} className="w-full p-2 border rounded" value={freeDraft.widthMm || 20} onChange={(e)=>setFreeDraft({...freeDraft, widthMm:Number(e.target.value)})} />
+                      </div>
+                      <div>
+                        <label className="block text-sm mb-1">Yükseklik (mm)</label>
+                        <input type="number" step={0.1} className="w-full p-2 border rounded" value={freeDraft.heightMm || 10} onChange={(e)=>setFreeDraft({...freeDraft, heightMm:Number(e.target.value)})} />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm mb-1">Renk</label>
+                      <input type="color" className="w-full h-10 border rounded" value={freeDraft.color || '#FFFFFF'} onChange={(e)=>setFreeDraft({...freeDraft, color:e.target.value})} />
                     </div>
                   </>
                 )}
@@ -1703,12 +1822,12 @@ const LabelGenerator: React.FC = () => {
                   className="px-3 py-1.5 text-sm rounded bg-purple-600 text-white"
                   onClick={()=>{
                     if (!freeDraft) return;
-                    const applyTo = freeEditContext === 'workspace' ? setWsItems : setFreeItems;
+                    const applyTo = freeEditContext === 'workspace' ? setWsItems : setFreeItemTypes;
                     if (editingFreeId) {
-                      applyTo((arr: FreeItem[]) => normalizeZ(arr.map(it => it.id===editingFreeId ? { ...it, ...freeDraft, id: editingFreeId } as FreeItem : it)));
+                      applyTo((arr: FreeItemType[]) => normalizeZ(arr.map(it => it.id===editingFreeId ? { ...it, ...freeDraft, id: editingFreeId } as FreeItemType : it)));
                     } else {
                       const id = crypto.randomUUID();
-                      applyTo((arr: FreeItem[]) => normalizeZ([ ...arr, { id, ...(freeDraft as any), zIndex: getMaxZ(arr)+1 } as FreeItem ]));
+                      applyTo((arr: FreeItemType[]) => normalizeZ([ ...arr, { id, ...(freeDraft as any), zIndex: getMaxZ(arr)+1 } as FreeItemType ]));
                     }
                     setShowFreeDialog(false);
                     setEditingFreeId(null);
@@ -1735,10 +1854,36 @@ const LabelGenerator: React.FC = () => {
                     <button className="px-2 py-1 text-sm rounded border" onClick={()=>adjustSelectedSize(-1)} title="Küçült">−</button>
                     <button className="px-2 py-1 text-sm rounded border" onClick={()=>adjustSelectedSize(1)} title="Büyüt">＋</button>
                   </div>
-                  <button className="px-3 py-1.5 text-sm rounded border" onClick={()=>{ setFreeEditContext('workspace'); setEditingFreeId(null); setFreeDraft({ type:'text', text:'Yeni Metin', fontMm:4, wrapWidthMm:60, x:6, y:6 }); setShowFreeDialog(true); }}>Metin</button>
+                  {/* Seçili öğe katman kontrolü */}
+                  {(wsSelectedAnchorKey || selectedFreeId) && (
+                    <div className="flex items-center gap-1 mr-2">
+                      <button className="px-2 py-1 text-sm rounded border" onClick={()=>{
+                        if (selectedFreeId) {
+                          moveLayer(selectedFreeId, 'down');
+                          // workspace items'ı güncelle
+                          setWsItems(prev => [...prev].map(item => {
+                            const found = freeItems.find(f => f.id === item.id);
+                            return found ? { ...found } : item;
+                          }));
+                        }
+                      }} title="Arkaya Al">Alt</button>
+                      <button className="px-2 py-1 text-sm rounded border" onClick={()=>{
+                        if (selectedFreeId) {
+                          moveLayer(selectedFreeId, 'up');
+                          // workspace items'ı güncelle
+                          setWsItems(prev => [...prev].map(item => {
+                            const found = freeItems.find(f => f.id === item.id);
+                            return found ? { ...found } : item;
+                          }));
+                        }
+                      }} title="Öne Al">Üst</button>
+                    </div>
+                  )}
+                  <button className="px-3 py-1.5 text-sm rounded border" onClick={()=>{ setFreeEditContext('workspace'); setEditingFreeId(null); setFreeDraft({ type:'text', text:'Yeni Metin', fontMm:4, wrapWidthMm:60, x:6, y:6, zIndex:5 }); setShowFreeDialog(true); }}>Metin</button>
                   <button className="px-3 py-1.5 text-sm rounded border" onClick={()=>{ setFreeEditContext('workspace'); setEditingFreeId(null); setFreeDraft({ type:'barcode', text:'5901234123457', widthMm:60, heightMm:12, x:6, y:20 }); setShowFreeDialog(true); }}>Barkod</button>
                   <input ref={imageInputRef} type="file" accept="image/*" className="hidden" onChange={(e)=>{ const f=e.target.files?.[0]; if(!f) return; const r=new FileReader(); r.onload=()=>{ setFreeEditContext('workspace'); setEditingFreeId(null); setFreeDraft({ type:'image', src:String(r.result), widthMm:30, heightMm:12, x:6, y:10 }); setShowFreeDialog(true); }; r.readAsDataURL(f); e.currentTarget.value=''; }} />
                   <button className="px-3 py-1.5 text-sm rounded border" onClick={()=>imageInputRef.current?.click()}>Görsel</button>
+                  <button className="px-3 py-1.5 text-sm rounded border" onClick={()=>{ setFreeEditContext('workspace'); setEditingFreeId(null); setFreeDraft({ type:'rectangle', widthMm:20, heightMm:10, color:'#FFFFFF', x:6, y:42, zIndex:0 }); setShowFreeDialog(true); }}>Dikdörtgen</button>
                   <div className="ml-4 flex items-center gap-2 text-sm">
                     <span>Yakınlaştır:</span>
                     <button className="px-2 py-1 bg-gray-200 rounded" onClick={()=>setWsZoom(z=>Math.max(0.5, Number((z-0.1).toFixed(2))))}>-</button>
@@ -1748,7 +1893,7 @@ const LabelGenerator: React.FC = () => {
                   </div>
                   <button className="px-3 py-1.5 text-sm rounded bg-emerald-600 text-white" onClick={()=>{ 
                     setFreeMode(true); 
-                    setFreeItems([...wsItems]); 
+                    setFreeItemTypes([...wsItems]); 
                     setShowFreeWorkspace(false); 
                     setShowPreview(true); 
                     setTimeout(()=>{ 
@@ -1756,13 +1901,13 @@ const LabelGenerator: React.FC = () => {
                         renderZPLPreview(); 
                         generateZPL(); 
                         // Force state update
-                        setFreeItems(prev => [...prev]);
+                        setFreeItemTypes(prev => [...prev]);
                       } catch {} 
                     }, 100); 
                   }}>Kaydet ve Kapat</button>
                   <button className="px-3 py-1.5 text-sm rounded bg-gray-200" onClick={()=>{ 
                     setFreeMode(true); 
-                    setFreeItems([...wsItems]); 
+                    setFreeItemTypes([...wsItems]); 
                     setShowFreeWorkspace(false); 
                     setShowPreview(true); 
                     setTimeout(()=>{ 
@@ -1770,7 +1915,7 @@ const LabelGenerator: React.FC = () => {
                         renderZPLPreview(); 
                         generateZPL(); 
                         // Force state update
-                        setFreeItems(prev => [...prev]);
+                        setFreeItemTypes(prev => [...prev]);
                       } catch {} 
                     }, 100); 
                   }}>Kapat</button>
@@ -1865,6 +2010,21 @@ const LabelGenerator: React.FC = () => {
                                 {labelData.entryDate && (<div>Giriş: {labelData.entryDate}</div>)}
                                 {labelData.expiryDate && (<div>SKT: {labelData.expiryDate}</div>)}
                                 {labelData.supplier && (<div>Tedarikçi: {labelData.supplier}</div>)}
+                                
+                                {/* Custom fields */}
+                                {labelTypeCustomFields?.filter(field => field.visible).map(field => {
+                                  const value = labelData.customFields?.[field.name];
+                                  if (value !== undefined && value !== null && value !== '') {
+                                    let displayValue = String(value);
+                                    if (field.type === 'boolean') {
+                                      displayValue = value ? 'Evet' : 'Hayır';
+                                    } else if (field.type === 'date' && value) {
+                                      displayValue = new Date(String(value)).toLocaleDateString('tr-TR');
+                                    }
+                                    return (<div key={field.id}>{field.label}: {displayValue}</div>);
+                                  }
+                                  return null;
+                                })}
                               </div>
                             )}
                             {key==='barcode' && labelData.barcode && (
@@ -1927,7 +2087,7 @@ const LabelGenerator: React.FC = () => {
                       </div>
                       {/* Serbest öğe overlay */}
                       <div className="absolute inset-4 pointer-events-none select-none">
-                        {wsItems.map((item) => (
+                        {[...wsItems].sort((a,b)=> (a.zIndex||0)-(b.zIndex||0)).map((item) => (
                           <div
                             key={item.id}
                             className="absolute bg-purple-500/10 border border-purple-500 text-[10px] text-purple-800 rounded pointer-events-auto"
@@ -2010,17 +2170,30 @@ const LabelGenerator: React.FC = () => {
                                   className="absolute inset-0 w-full h-full object-contain pointer-events-none"
                                 />
                               )}
+                              {item.type === 'rectangle' && (
+                                <div
+                                  className="absolute inset-0 pointer-events-none"
+                                  style={{
+                                    backgroundColor: item.color || '#000000',
+                                    // Beyaz dikdörtgen için silgi görsel etkisi
+                                    ...(item.color === '#FFFFFF' || item.color === '#ffffff' ? {
+                                      backgroundColor: 'rgba(255,255,255,0.8)',
+                                      border: '1px dashed #ccc',
+                                      boxSizing: 'border-box'
+                                    } : {})
+                                  }}
+                                />
+                              )}
                             <div className="absolute right-0 bottom-0 w-3 h-3 bg-purple-600 cursor-se-resize"
                               onMouseDown={(e)=>{
                                 e.stopPropagation();
-                                setResizingKey('productName');
                                 const parent=(e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
                                 setResizeStart({ x0:e.clientX, y0:e.clientY, wMm: parseFloat(((parent.width)/(3.78*wsZoom)).toFixed(2)), hMm: parseFloat(((parent.height)/(3.78*wsZoom)).toFixed(2)), productFont: item.fontMm||4, productWrap: item.wrapWidthMm||60, titleFont:0, detailsGap:0, detailsFont:0, bcHeight:item.heightMm||12, bcScale:1 });
                                 setWsResizingFreeId(item.id);
                                 setWsResizeStartFree({ x0:e.clientX, y0:e.clientY, wMm: item.widthMm||40, hMm: item.heightMm||12, fontMm: item.fontMm||4, wrapMm: item.wrapWidthMm||60 });
                               }}
-                              onMouseUp={()=>{ setResizingKey(null); setWsResizingFreeId(null); }}
-                              onMouseLeave={()=>{ setResizingKey(null); setWsResizingFreeId(null); }} />
+                              onMouseUp={()=>{ setWsResizingFreeId(null); }}
+                              onMouseLeave={()=>{ setWsResizingFreeId(null); }} />
                           </div>
                         ))}
                       </div>
@@ -2118,7 +2291,7 @@ const LabelGenerator: React.FC = () => {
                 <button className="px-3 py-1.5 text-sm rounded bg-gray-200 dark:bg-gray-700" onClick={()=>setRemoveFreeId(null)}>Vazgeç</button>
                 <button
                   className="px-3 py-1.5 text-sm rounded bg-red-600 text-white"
-                  onClick={() => { setFreeItems(items => items.filter(i => i.id !== removeFreeId)); setRemoveFreeId(null); }}
+                  onClick={() => { setFreeItemTypes(items => items.filter(i => i.id !== removeFreeId)); setRemoveFreeId(null); }}
                 >Kaldır</button>
               </div>
             </div>

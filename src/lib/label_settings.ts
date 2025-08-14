@@ -17,11 +17,22 @@ export interface FieldRule {
 
 export type FieldsConfig = Record<LabelFieldKey, FieldRule>;
 
+export interface CustomField {
+  id: string;
+  name: string;
+  type: 'text' | 'number' | 'date' | 'boolean';
+  label: string;
+  required: boolean;
+  visible: boolean;
+  defaultValue?: string | number | boolean;
+}
+
 export interface LabelTypeDef {
   id?: string;
   name: string;
   fields: FieldsConfig;
   anchors?: Record<string, { x: number; y: number }>; // mm cinsinden
+  custom_fields?: CustomField[];
 }
 
 export const buildDefaultFields = (overrides?: Partial<FieldsConfig>): FieldsConfig => ({

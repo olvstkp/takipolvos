@@ -1,0 +1,6 @@
+﻿feat: serbest etiket için büyült/küçült düğmeleri eklendi
+
+- Küçük önizlemede seçili öge için büyült/küçült düğmeleri
+- adjustSelectedFreeSize() fonksiyonu eklendi
+- Düğmeler sadece selectedFreeId aktifken görünür
+- Büyük önizleme modal kapanma senkronizasyonu iyileştirildi

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { DEFAULT_LABEL_TYPES, LabelFieldKey, LabelTypeDef, buildDefaultFields } from '../lib/label_settings';
+import { DEFAULT_LABEL_TYPES, LabelFieldKey, LabelTypeDef, buildDefaultFields, CustomField } from '../lib/label_settings';
 import ConfirmDialog from './ConfirmDialog';
 
 const ALL_FIELDS: LabelFieldKey[] = [
@@ -41,6 +41,13 @@ const LabelSettingsModal: React.FC<Props> = ({ open, onClose }) => {
   const [fields, setFields] = useState(buildDefaultFields());
   const [saving, setSaving] = useState(false);
   const [anchors, setAnchors] = useState<Record<string, { x:number; y:number }>>({ title:{x:6,y:6}, productName:{x:6,y:13}, details:{x:6,y:26}, barcode:{x:6,y:34} });
+  const [customFields, setCustomFields] = useState<CustomField[]>([]);
+  const [showCustomFieldForm, setShowCustomFieldForm] = useState(false);
+  const [editingCustomField, setEditingCustomField] = useState<CustomField | null>(null);
+  const [customFieldName, setCustomFieldName] = useState('');
+  const [customFieldLabel, setCustomFieldLabel] = useState('');
+  const [customFieldType, setCustomFieldType] = useState<CustomField['type']>('text');
+  const [customFieldRequired, setCustomFieldRequired] = useState(false);
   const scale = 5; // px per mm for mini preview
   const previewRef = useRef<HTMLDivElement>(null);
   const [dragKey, setDragKey] = useState<'title'|'productName'|'details'|'barcode'|null>(null);
@@ -53,7 +60,7 @@ const LabelSettingsModal: React.FC<Props> = ({ open, onClose }) => {
 
   const load = async () => {
     setLoading(true);
-    const { data, error } = await supabase.from('label_types').select('id, name, fields, anchors').order('name', { ascending: true });
+    const { data, error } = await supabase.from('label_types').select('id, name, fields, anchors, custom_fields').order('name', { ascending: true });
     if (!error && data) {
       setTypes(data as LabelTypeDef[]);
     } else {
@@ -85,6 +92,17 @@ const LabelSettingsModal: React.FC<Props> = ({ open, onClose }) => {
     setName('');
     setFields(buildDefaultFields());
     setAnchors({ title:{x:6,y:6}, productName:{x:6,y:13}, details:{x:6,y:26}, barcode:{x:6,y:34} });
+    setCustomFields([]);
+    resetCustomFieldForm();
+  };
+
+  const resetCustomFieldForm = () => {
+    setShowCustomFieldForm(false);
+    setEditingCustomField(null);
+    setCustomFieldName('');
+    setCustomFieldLabel('');
+    setCustomFieldType('text');
+    setCustomFieldRequired(false);
   };
 
   const onEdit = (t: LabelTypeDef) => {
@@ -92,6 +110,8 @@ const LabelSettingsModal: React.FC<Props> = ({ open, onClose }) => {
     setName(t.name);
     setFields({ ...buildDefaultFields(), ...(t.fields || {}) });
     setAnchors((t.anchors as any) || { title:{x:6,y:6}, productName:{x:6,y:13}, details:{x:6,y:26}, barcode:{x:6,y:34} });
+    setCustomFields(t.custom_fields || []);
+    resetCustomFieldForm();
   };
 
   const onDelete = async (id?: string) => {
@@ -108,7 +128,7 @@ const LabelSettingsModal: React.FC<Props> = ({ open, onClose }) => {
 
   const onSave = async () => {
     setSaving(true);
-    const payload = { name: name.trim(), fields, anchors };
+    const payload = { name: name.trim(), fields, anchors, custom_fields: customFields };
     if (!payload.name) { setSaving(false); return; }
     if (editing?.id) {
       await supabase.from('label_types').update(payload).eq('id', editing.id);
@@ -118,6 +138,36 @@ const LabelSettingsModal: React.FC<Props> = ({ open, onClose }) => {
     setSaving(false);
     resetForm();
     await load();
+  };
+
+  const addCustomField = () => {
+    const newField: CustomField = {
+      id: Date.now().toString(),
+      name: customFieldName.trim(),
+      label: customFieldLabel.trim() || customFieldName.trim(),
+      type: customFieldType,
+      required: customFieldRequired,
+      visible: true,
+    };
+    if (editingCustomField) {
+      setCustomFields(prev => prev.map(f => f.id === editingCustomField.id ? newField : f));
+    } else {
+      setCustomFields(prev => [...prev, newField]);
+    }
+    resetCustomFieldForm();
+  };
+
+  const editCustomField = (field: CustomField) => {
+    setEditingCustomField(field);
+    setCustomFieldName(field.name);
+    setCustomFieldLabel(field.label);
+    setCustomFieldType(field.type);
+    setCustomFieldRequired(field.required);
+    setShowCustomFieldForm(true);
+  };
+
+  const deleteCustomField = (id: string) => {
+    setCustomFields(prev => prev.filter(f => f.id !== id));
   };
 
   if (!open) return null;
@@ -194,6 +244,101 @@ const LabelSettingsModal: React.FC<Props> = ({ open, onClose }) => {
                   </div>
                 ))}
               </div>
+              
+              {/* Özel Alanlar */}
+              <div className="border rounded p-3">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="text-sm font-medium">Özel Alanlar</div>
+                  <button 
+                    className="px-2 py-1 text-xs bg-indigo-600 text-white rounded"
+                    onClick={() => setShowCustomFieldForm(true)}
+                  >+ Yeni Alan</button>
+                </div>
+                
+                {showCustomFieldForm && (
+                  <div className="border rounded p-3 mb-3 bg-gray-50">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs mb-1">Alan Adı (İngilizce)</label>
+                        <input 
+                          className="w-full p-2 border rounded text-sm" 
+                          value={customFieldName} 
+                          onChange={e => setCustomFieldName(e.target.value)} 
+                          placeholder="örn: manufacturingDate" 
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs mb-1">Görünür Ad</label>
+                        <input 
+                          className="w-full p-2 border rounded text-sm" 
+                          value={customFieldLabel} 
+                          onChange={e => setCustomFieldLabel(e.target.value)} 
+                          placeholder="örn: Üretim Tarihi" 
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs mb-1">Tip</label>
+                        <select 
+                          className="w-full p-2 border rounded text-sm" 
+                          value={customFieldType} 
+                          onChange={e => setCustomFieldType(e.target.value as CustomField['type'])}
+                        >
+                          <option value="text">Metin</option>
+                          <option value="number">Sayı</option>
+                          <option value="date">Tarih</option>
+                          <option value="boolean">Evet/Hayır</option>
+                        </select>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <label className="flex items-center gap-1 text-xs">
+                          <input 
+                            type="checkbox" 
+                            checked={customFieldRequired} 
+                            onChange={e => setCustomFieldRequired(e.target.checked)} 
+                          /> Zorunlu
+                        </label>
+                      </div>
+                    </div>
+                    <div className="flex gap-2 mt-3">
+                      <button 
+                        className="px-3 py-1 text-xs bg-indigo-600 text-white rounded disabled:opacity-50"
+                        disabled={!customFieldName.trim()}
+                        onClick={addCustomField}
+                      >{editingCustomField ? 'Güncelle' : 'Ekle'}</button>
+                      <button 
+                        className="px-3 py-1 text-xs bg-gray-200 rounded"
+                        onClick={resetCustomFieldForm}
+                      >İptal</button>
+                    </div>
+                  </div>
+                )}
+                
+                <div className="space-y-2">
+                  {customFields.map(field => (
+                    <div key={field.id} className="flex items-center justify-between p-2 bg-gray-50 rounded text-sm">
+                      <div>
+                        <span className="font-medium">{field.label}</span>
+                        <span className="text-gray-500 ml-2">({field.type})</span>
+                        {field.required && <span className="text-red-500 ml-1">*</span>}
+                      </div>
+                      <div className="flex gap-1">
+                        <button 
+                          className="px-2 py-1 text-xs border rounded"
+                          onClick={() => editCustomField(field)}
+                        >Düzenle</button>
+                        <button 
+                          className="px-2 py-1 text-xs border rounded text-red-600"
+                          onClick={() => deleteCustomField(field.id)}
+                        >Sil</button>
+                      </div>
+                    </div>
+                  ))}
+                  {customFields.length === 0 && (
+                    <div className="text-xs text-gray-500 italic">Henüz özel alan eklenmedi.</div>
+                  )}
+                </div>
+              </div>
+              
               {/* Konumlar ve mini önizleme */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 <div className="border rounded p-3">

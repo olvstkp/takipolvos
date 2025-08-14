@@ -1,4 +1,5 @@
 import React from 'react';
+import { FreeItem as ImportedFreeItem, FreeItemType as ImportedFreeItemType } from './FreeItemsPanel';
 
 type AnchorKey = 'title' | 'productName' | 'details' | 'barcode';
 
@@ -11,20 +12,8 @@ type ElementStyles = {
   barcode: { height: number; widthMm: number };
 };
 
-type FreeItemType = 'text' | 'barcode' | 'image' | 'line' | 'circle' | 'ring';
-type FreeItem = {
-  id: string;
-  type: FreeItemType;
-  x: number;
-  y: number;
-  widthMm?: number;
-  heightMm?: number;
-  text?: string;
-  fontMm?: number;
-  wrapWidthMm?: number;
-  src?: string;
-  zIndex?: number;
-};
+type FreeItemType = ImportedFreeItemType;
+type FreeItem = ImportedFreeItem;
 
 interface PreviewCanvasProps {
   canvasRef: React.RefObject<HTMLCanvasElement>;
@@ -51,7 +40,7 @@ interface PreviewCanvasProps {
   setDragKey: (k: AnchorKey | null) => void;
   setDraggingAnchorKey: (k: AnchorKey | null) => void;
   setDragOffset: (o: { dx: number; dy: number }) => void;
-  setResizingKey: (k: AnchorKey | null) => void;
+
   setResizingAnchorKeyGlobal: (k: AnchorKey | null) => void;
   setResizeStart: (v: {
     x0: number; y0: number; wMm: number; hMm: number;
@@ -93,7 +82,7 @@ const PreviewCanvas: React.FC<PreviewCanvasProps> = (props) => {
     setDragKey,
     setDraggingAnchorKey,
     setDragOffset,
-    setResizingKey,
+
     setResizingAnchorKeyGlobal,
     setResizeStart,
     setDraggingFreeId,
@@ -171,7 +160,6 @@ const PreviewCanvas: React.FC<PreviewCanvasProps> = (props) => {
                   className="absolute right-0 bottom-0 w-3 h-3 bg-blue-600 cursor-se-resize"
                   onMouseDown={(e) => {
                     e.stopPropagation();
-                    setResizingKey(key);
                     setResizingAnchorKeyGlobal(key);
                     const parent = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
                     setResizeStart({
@@ -188,20 +176,20 @@ const PreviewCanvas: React.FC<PreviewCanvasProps> = (props) => {
                       bcScale: 1
                     });
                   }}
-                  onMouseUp={() => { setResizingKey(null); setResizingAnchorKeyGlobal(null); }}
+                  onMouseUp={() => { setResizingAnchorKeyGlobal(null); }}
                 />
               </div>
             ))}
 
             {/* Serbest öğeler: Serbest sekmede veya standartta freeMode aktifken */}
-            {(activeTab==='serbest' || freeMode) && freeItems.map((item) => (
+            {(activeTab==='serbest' || freeMode) && [...freeItems].sort((a,b)=> (a.zIndex||0)-(b.zIndex||0)).map((item) => (
               <div
                 key={item.id}
                 className={`absolute bg-purple-500/10 border border-purple-500 text-[10px] text-purple-800 rounded pointer-events-auto z-20 ${selectedFreeId===item.id ? 'ring-2 ring-purple-500' : ''}`}
                 style={{
                   left: `${item.x * 3.78 * zoom}px`,
                   top: `${item.y * 3.78 * zoom}px`,
-                  width: `${((item.type==='text' ? (item.wrapWidthMm || 60) : (item.widthMm || 40)) * 3.78 * zoom)}px`,
+                  width: `${((item.type==='text' ? (item.wrapWidthMm || 60) : item.type==='rectangle' ? (item.widthMm || 20) : (item.widthMm || 40)) * 3.78 * zoom)}px`,
                   height: `${(() => {
                     if (item.type==='text') {
                       const font = item.fontMm || 4;
@@ -220,6 +208,7 @@ const PreviewCanvas: React.FC<PreviewCanvasProps> = (props) => {
                       return calc * 3.78 * zoom;
                     }
                     if (item.type==='line') return (item.heightMm || 0.6) * 3.78 * zoom;
+                    if (item.type==='rectangle') return (item.heightMm || 10) * 3.78 * zoom;
                     return (item.heightMm || 12) * 3.78 * zoom;
                   })()}px`,
                   cursor: 'move'
@@ -257,7 +246,6 @@ const PreviewCanvas: React.FC<PreviewCanvasProps> = (props) => {
                   className="absolute right-0 bottom-0 w-3 h-3 bg-purple-600 cursor-se-resize"
                   onMouseDown={(e) => {
                     e.stopPropagation();
-                    setResizingKey('productName');
                     setResizingFreeIdGlobal(item.id);
                     const parent = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
                     setResizeStart({
@@ -274,7 +262,7 @@ const PreviewCanvas: React.FC<PreviewCanvasProps> = (props) => {
                       bcScale: 1
                     });
                   }}
-                  onMouseUp={() => { setResizingKey(null); setResizingFreeIdGlobal(null); }}
+                  onMouseUp={() => { setResizingFreeIdGlobal(null); }}
                 />
               </div>
             ))}

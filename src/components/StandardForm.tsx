@@ -1,5 +1,6 @@
 import React from 'react';
 import TypePicker from './TypePicker';
+import { CustomField } from '../lib/label_settings';
 
 type LabelData = {
   productName: string;
@@ -12,6 +13,7 @@ type LabelData = {
   supplier: string;
   logo: string;
   barcode?: string;
+  customFields?: Record<string, string | number | boolean>;
 };
 
 type CompanyLogo = { company_name: string; logo_url: string };
@@ -67,6 +69,7 @@ interface StandardFormProps {
   validateEan13: (input?: string) => { normalized: string | null; error?: string; checksum?: number };
   // Etiket türüne bağlı alan görünürlüğü
   fieldsConfig?: Record<string, { visible: boolean; required: boolean }> | null;
+  customFields?: CustomField[];
 }
 
 const StandardForm: React.FC<StandardFormProps> = ({
@@ -104,12 +107,68 @@ const StandardForm: React.FC<StandardFormProps> = ({
   setStyles,
   validateEan13,
   fieldsConfig,
+  customFields,
   labelTypeOptions,
 }) => {
   const isVisible = (key: keyof LabelData): boolean => {
     if (!fieldsConfig) return false;
     const f = fieldsConfig[key as string];
     return f ? f.visible !== false : true;
+  };
+
+  const renderCustomField = (field: CustomField) => {
+    const value = labelData.customFields?.[field.name] || '';
+    const updateCustomField = (newValue: string | number | boolean) => {
+      setLabelData({
+        ...labelData,
+        customFields: {
+          ...labelData.customFields,
+          [field.name]: newValue
+        }
+      });
+    };
+
+    switch (field.type) {
+      case 'number':
+        return (
+          <input
+            type="number"
+            value={value as number || ''}
+            onChange={(e) => updateCustomField(Number(e.target.value))}
+            className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          />
+        );
+      case 'date':
+        return (
+          <input
+            type="date"
+            value={value as string || ''}
+            onChange={(e) => updateCustomField(e.target.value)}
+            className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          />
+        );
+      case 'boolean':
+        return (
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={Boolean(value)}
+              onChange={(e) => updateCustomField(e.target.checked)}
+              className="rounded"
+            />
+            <span className="text-sm">Evet</span>
+          </label>
+        );
+      default: // text
+        return (
+          <input
+            type="text"
+            value={value as string || ''}
+            onChange={(e) => updateCustomField(e.target.value)}
+            className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          />
+        );
+    }
   };
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-6">
@@ -243,6 +302,17 @@ const StandardForm: React.FC<StandardFormProps> = ({
             placeholder="Akdeniz Gıda"
           />
         </div>)}
+
+        {/* Özel Alanlar */}
+        {customFields?.filter(field => field.visible).map(field => (
+          <div key={field.id}>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              {field.label}
+              {field.required && <span className="text-red-500 ml-1">*</span>}
+            </label>
+            {renderCustomField(field)}
+          </div>
+        ))}
 
         {isVisible('logo') && (<div>
           <label className="block text-sm font-medium text-gray-700 mb-1">Şirket Logosu</label>

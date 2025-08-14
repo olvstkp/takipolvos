@@ -1,6 +1,6 @@
 import React from 'react';
 
-export type FreeItemType = 'text' | 'barcode' | 'image' | 'line' | 'circle' | 'ring';
+export type FreeItemType = 'text' | 'barcode' | 'image' | 'line' | 'circle' | 'ring' | 'rectangle';
 export interface FreeItem {
   id: string;
   type: FreeItemType;
@@ -12,6 +12,7 @@ export interface FreeItem {
   fontMm?: number;
   wrapWidthMm?: number;
   src?: string;
+  color?: string;
   zIndex?: number;
 }
 
@@ -49,10 +50,10 @@ const FreeItemsPanel: React.FC<FreeItemsPanelProps> = ({ items, selectedId, onSe
                 onDrop={()=>{ if(dragId) onReorder(dragId, it.id); setDragId(null); }}
               >
                 <span className="inline-flex w-4 h-4 items-center justify-center text-[10px] rounded bg-gray-200 text-gray-700">
-                  {it.type==='text' ? 'T' : it.type==='barcode' ? 'B' : 'G'}
+                  {it.type==='text' ? 'T' : it.type==='barcode' ? 'B' : it.type==='rectangle' ? 'R' : 'G'}
                 </span>
                 <button className={`text-left truncate flex-1 ${selectedId===it.id ? 'font-medium text-purple-700' : ''}`} onClick={()=>onSelect(it.id)}>
-                  {it.type==='text' ? (it.text||'Metin') : it.type==='barcode' ? (it.text||'Barkod') : 'Görsel'}
+                  {it.type==='text' ? (it.text||'Metin') : it.type==='barcode' ? (it.text||'Barkod') : it.type==='rectangle' ? 'Dikdörtgen' : 'Görsel'}
                 </button>
                 <div className="flex items-center gap-2">
                   <button className="text-xs px-1 py-0.5 rounded border" onClick={()=> onMoveLayer(it.id, 'down')}>Alt</button>
