@@ -201,8 +201,27 @@ const PreviewCanvas: React.FC<PreviewCanvasProps> = (props) => {
                 style={{
                   left: `${item.x * 3.78 * zoom}px`,
                   top: `${item.y * 3.78 * zoom}px`,
-                  width: `${(item.widthMm || 40) * 3.78 * zoom}px`,
-                  height: `${(item.heightMm || (item.type==='text' ? (item.fontMm||4)+6 : item.type==='line' ? 0.6 : 12)) * 3.78 * zoom}px`,
+                  width: `${((item.type==='text' ? (item.wrapWidthMm || 60) : (item.widthMm || 40)) * 3.78 * zoom)}px`,
+                  height: `${(() => {
+                    if (item.type==='text') {
+                      const font = item.fontMm || 4;
+                      const wrap = item.wrapWidthMm || 60;
+                      const text = item.text || '';
+                      const charW = font * 0.55; // yaklaşık karakter genişliği (mm)
+                      const maxChars = Math.max(1, Math.floor(wrap / charW));
+                      const words = text.split(/\s+/).filter(Boolean);
+                      let lines = 1; let lineLen = 0;
+                      for (const w of words) {
+                        const need = (lineLen>0 ? 1 : 0) + w.length;
+                        if (lineLen + need > maxChars) { lines++; lineLen = w.length; } else { lineLen += need; }
+                      }
+                      const lineHeightMm = font * 1.15;
+                      const calc = Math.max(font + 2, lines * lineHeightMm);
+                      return calc * 3.78 * zoom;
+                    }
+                    if (item.type==='line') return (item.heightMm || 0.6) * 3.78 * zoom;
+                    return (item.heightMm || 12) * 3.78 * zoom;
+                  })()}px`,
                   cursor: 'move'
                 }}
                 onMouseDown={(e) => {

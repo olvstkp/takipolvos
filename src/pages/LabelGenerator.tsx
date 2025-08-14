@@ -45,14 +45,14 @@ const LabelGenerator: React.FC = () => {
   const [dpi, setDpi] = useState<203 | 300 | 600>(203);
   const [darkness, setDarkness] = useState<number>(2);
   const [zplDarkness, setZplDarkness] = useState<number>(30); // ^MD 0-30
-  const [printSpeed, setPrintSpeed] = useState<number>(4); // ^PR 1-14 (düşük= daha koyu)
+  const [printSpeed, setPrintSpeed] = useState<number>(1); // ^PR 1-14 (varsayılan 1: daha koyu)
   const [showAdvancedSettings, setShowAdvancedSettings] = useState<boolean>(false);
   const [zoom, setZoom] = useState<number>(() => {
     const saved = Number(localStorage.getItem('label_zoom') || '1');
     return isNaN(saved) ? 1 : Math.min(3, Math.max(0.5, saved));
   });
   const [zplCode, setZplCode] = useState('');
-  const [showPreview, setShowPreview] = useState(false);
+  const [showPreview, setShowPreview] = useState(true);
   const [showLabelSettings, setShowLabelSettings] = useState(false);
   // /labels sayfası ilk açılışta kısa yükleniyor durumu
   const [initialLoading, setInitialLoading] = useState<boolean>(true);
@@ -60,8 +60,12 @@ const LabelGenerator: React.FC = () => {
   const overlayRef = useRef<HTMLDivElement>(null);
   // Ajan vb. yok – sade mod
   // Resize yumuşatma: hız ve easing
-  const RESIZE_SENS = 0.080; // artırıldı: daha hızlı tepki
-  const RESIZE_SMOOTH = 0.030; // artırıldı: daha az gecikme
+  const RESIZE_SENS = 0.22; // küçük önizleme: daha yüksek hassasiyet
+  const RESIZE_SMOOTH = 0.12; // küçük önizleme: daha hızlı yaklaşım
+  // büyük önizleme (workspace) için hızlandırma katsayıları
+  const WS_RESIZE_SENS = 3.0;
+  const WS_FREE_RESIZE_SENS = 3.0;
+  const WS_RESIZE_SMOOTH = 0.18; // büyük önizleme: daha pürüzsüz
   const resizeDeltaRef = useRef<{dx:number; dy:number}>({ dx:0, dy:0 });
 
   // Şirket logoları (Supabase -> company_logo)
@@ -184,6 +188,10 @@ const LabelGenerator: React.FC = () => {
 
   // Tür kurallarını görünürlükle birleştir (type-visible AND user-visible)
   const effectiveVisible = React.useMemo(() => {
+    // Etiket türü seçilmediyse, önizleme alanı açık kalsın ama içerik çizilmesin
+    if (!labelType) {
+      return { title:false, productName:false, details:false, barcode:false } as Record<AnchorKey, boolean>;
+    }
     const typeVis: Record<AnchorKey, boolean> = {
       title: true,
       productName: true,
@@ -202,7 +210,7 @@ const LabelGenerator: React.FC = () => {
       details: visible.details && typeVis.details,
       barcode: visible.barcode && typeVis.barcode,
     } as Record<AnchorKey, boolean>;
-  }, [visible, labelTypeFields]);
+  }, [visible, labelTypeFields, labelType]);
 
   // Serbest Mod öğeleri
   type FreeItemType = 'text' | 'barcode' | 'image' | 'line' | 'circle' | 'ring';
@@ -219,6 +227,48 @@ const LabelGenerator: React.FC = () => {
     src?: string; // image data url
     zIndex?: number; // katmanlama
   };
+  // Çakışma önleme yardımcıları (serbest öğeler ve sabit anchorlar)
+  const getFreeItemBounds = (item: FreeItem) => {
+    const widthMm = (() => {
+      if (item.type === 'text') return Math.max(10, item.wrapWidthMm || 60);
+      if (item.type === 'line') return Math.max(5, item.widthMm || 40);
+      return Math.max(10, item.widthMm || 40);
+    })();
+    const heightMm = (() => {
+      if (item.type === 'text') return Math.max(4, (item.fontMm || 4) + 6);
+      if (item.type === 'line') return Math.max(0.2, item.heightMm || 0.6);
+      return Math.max(5, item.heightMm || 12);
+    })();
+    return { left: item.x, top: item.y, right: item.x + widthMm, bottom: item.y + heightMm };
+  };
+  const rectsOverlap = (A: {left:number;top:number;right:number;bottom:number}, B: {left:number;top:number;right:number;bottom:number}) => {
+    if (A.right <= B.left || A.left >= B.right || A.bottom <= B.top || A.top >= B.bottom) return false;
+    return true;
+  };
+  const getAnchorBoundsRuntime = (key: AnchorKey) => {
+    const left = anchors[key].x; const top = anchors[key].y;
+    if (key==='title') return { left, top, right: left + styles.title.widthMm, bottom: top + (styles.title.font + 2) };
+    if (key==='productName') return { left, top, right: left + styles.productName.wrapWidth, bottom: top + (styles.productName.font * 2 + styles.details.lineGap) };
+    if (key==='details') return { left, top, right: left + styles.details.widthMm, bottom: top + (styles.details.lineGap * 6) };
+    return { left, top, right: left + styles.barcode.widthMm, bottom: top + (styles.barcode.height + 8) };
+  };
+  const overlapsAnchorsRuntime = (rect: {left:number;top:number;right:number;bottom:number}) => {
+    const keys: AnchorKey[] = ['title','productName','details','barcode'];
+    for (const k of keys) {
+      if (!effectiveVisible[k]) continue;
+      const r = getAnchorBoundsRuntime(k);
+      if (rectsOverlap(rect, r)) return true;
+    }
+    return false;
+  };
+  const overlapsFreeItemsRuntime = (rect: {left:number;top:number;right:number;bottom:number}, items: FreeItem[], ignoreId?: string) => {
+    for (const it of items) {
+      if (it.id === ignoreId) continue;
+      const r = getFreeItemBounds(it);
+      if (rectsOverlap(rect, r)) return true;
+    }
+    return false;
+  };
   const [freeMode, setFreeMode] = useState<boolean>(false);
   const [freeItems, setFreeItems] = useState<FreeItem[]>([]);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -230,8 +280,56 @@ const LabelGenerator: React.FC = () => {
   const [showFreeWorkspace, setShowFreeWorkspace] = useState<boolean>(false);
   const [wsItems, setWsItems] = useState<FreeItem[]>([]);
   const wsCanvasRef = useRef<HTMLCanvasElement>(null);
+  const wsContainerRef = useRef<HTMLDivElement>(null);
   const [wsZoom, setWsZoom] = useState<number>(1);
   const [wsRemoveId, setWsRemoveId] = useState<string | null>(null);
+  // Büyük önizleme: standart anchor sürükleme/yeniden boyutlandırma
+  const [wsDraggingAnchorKey, setWsDraggingAnchorKey] = useState<AnchorKey | null>(null);
+  const [wsDragOffset, setWsDragOffset] = useState<{dx:number;dy:number}>({ dx:0, dy:0 });
+  const [wsResizingAnchorKey, setWsResizingAnchorKey] = useState<AnchorKey | null>(null);
+  const [wsResizeStart, setWsResizeStart] = useState<{x0:number;y0:number; wMm:number; hMm:number; productFont:number; productWrap:number; titleFont:number; detailsGap:number; detailsFont:number; bcHeight:number}>({ x0:0, y0:0, wMm:0, hMm:0, productFont:0, productWrap:0, titleFont:0, detailsGap:0, detailsFont:0, bcHeight:0 });
+  const [wsSelectedAnchorKey, setWsSelectedAnchorKey] = useState<AnchorKey | null>(null);
+  const wsResizeDeltaRef = useRef<{dx:number; dy:number}>({ dx:0, dy:0 });
+  // Workspace serbest öğe resize state (global mousemove için)
+  const [wsResizingFreeId, setWsResizingFreeId] = useState<string | null>(null);
+  const [wsResizeStartFree, setWsResizeStartFree] = useState<{x0:number;y0:number; wMm:number; hMm:number; fontMm:number; wrapMm:number}>({ x0:0, y0:0, wMm:0, hMm:0, fontMm:4, wrapMm:60 });
+  const wsFreeResizeDeltaRef = useRef<{dx:number; dy:number}>({ dx:0, dy:0 });
+
+  const adjustSelectedSize = (direction: 1 | -1) => {
+    const mmStep = 1.5 * direction;
+    const fontStep = 0.8 * direction;
+    if (wsSelectedAnchorKey) {
+      const key = wsSelectedAnchorKey;
+      setStyles(s => {
+        if (key==='productName') return { ...s, productName: { ...s.productName, wrapWidth: Math.max(20, s.productName.wrapWidth + mmStep*2), font: Math.max(2, s.productName.font + fontStep) } };
+        if (key==='title') return { ...s, title: { ...s.title, widthMm: Math.max(10, s.title.widthMm + mmStep*2), font: Math.max(2, s.title.font + fontStep) } };
+        if (key==='details') return { ...s, details: { ...s.details, widthMm: Math.max(20, s.details.widthMm + mmStep*2), lineGap: Math.max(2, s.details.lineGap + fontStep/2), font: Math.max(2, s.details.font + fontStep/2) } };
+        if (key==='barcode') return { ...s, barcode: { ...s.barcode, widthMm: Math.max(20, s.barcode.widthMm + mmStep*2), height: Math.max(5, s.barcode.height + mmStep) } };
+        return s;
+      });
+      return;
+    }
+    if (selectedFreeId) {
+      setWsItems(arr => arr.map(it => {
+        if (it.id !== selectedFreeId) return it;
+        if (it.type==='text') return { ...it, wrapWidthMm: Math.max(20, (it.wrapWidthMm||60) + mmStep*2), fontMm: Math.max(2, (it.fontMm||4) + fontStep) };
+        if (it.type==='line') return { ...it, widthMm: Math.max(5, (it.widthMm||40) + mmStep*2), heightMm: Math.max(0.2, (it.heightMm||0.6) + fontStep/3) };
+        return { ...it, widthMm: Math.max(10, (it.widthMm||40) + mmStep*2), heightMm: Math.max(5, (it.heightMm||12) + mmStep) };
+      }));
+    }
+  };
+
+  const adjustSelectedFreeSize = (direction: 1 | -1) => {
+    if (!selectedFreeId) return;
+    const mmStep = 1.5 * direction;
+    const fontStep = 0.8 * direction;
+    setFreeItems(arr => arr.map(it => {
+      if (it.id !== selectedFreeId) return it;
+      if (it.type==='text') return { ...it, wrapWidthMm: Math.max(20, (it.wrapWidthMm||60) + mmStep*2), fontMm: Math.max(2, (it.fontMm||4) + fontStep) };
+      if (it.type==='line') return { ...it, widthMm: Math.max(5, (it.widthMm||40) + mmStep*2), heightMm: Math.max(0.2, (it.heightMm||0.6) + fontStep/3) };
+      return { ...it, widthMm: Math.max(10, (it.widthMm||40) + mmStep*2), heightMm: Math.max(5, (it.heightMm||12) + mmStep) };
+    }));
+  };
   // Izgara ve hizalama
   const [showGrid, setShowGrid] = useState<boolean>(true);
   const [snapToGrid, setSnapToGrid] = useState<boolean>(true);
@@ -291,6 +389,7 @@ const LabelGenerator: React.FC = () => {
         setFreeItems(arr => arr.map(it => {
           if (it.id !== resizingFreeIdGlobal) return it;
           if (it.type==='text') {
+            // Metin: genişlik wrapWidthMm, yükseklik fontMm; font büyürken satır yüksekliği render tarafında fonta bağlı
             return { ...it, wrapWidthMm: Math.max(20, (it.wrapWidthMm||60) + dxMm), fontMm: Math.max(2, (it.fontMm||4) + dyMm) };
           }
           if (it.type==='line') {
@@ -307,6 +406,78 @@ const LabelGenerator: React.FC = () => {
     window.addEventListener('mouseup', handleUp);
     return () => { window.removeEventListener('mousemove', handleMove); window.removeEventListener('mouseup', handleUp); };
   }, [draggingAnchorKey, draggingFreeId, resizingAnchorKeyGlobal, resizingFreeIdGlobal, resizeStart, dragOffset, zoom, snapToGrid, gridMm, labelWidth, labelHeight]);
+
+  // Büyük Önizleme açıldığında etiketi alanın genişliğine göre otomatik büyüt
+  useEffect(() => {
+    if (!showFreeWorkspace) return;
+    const fit = () => {
+      const container = wsContainerRef.current;
+      if (!container) return;
+      const basePx = labelWidth * 3.78; // 1x zoom genişliği
+      const available = Math.max(100, container.clientWidth - 32);
+      const target = Math.min(6, Math.max(0.5, available / basePx));
+      setWsZoom(Number(target.toFixed(2)));
+    };
+    fit();
+    window.addEventListener('resize', fit);
+    return () => window.removeEventListener('resize', fit);
+  }, [showFreeWorkspace, labelWidth]);
+
+  // Workspace: serbest öğe global resize hareketi
+  useEffect(() => {
+    if (!showFreeWorkspace) return;
+    const onMove = (e: MouseEvent) => {
+      if (!wsResizingFreeId) return;
+      const base = 3.78 * wsZoom;
+      const rawDx = (e.clientX - wsResizeStartFree.x0) / base;
+      const rawDy = (e.clientY - wsResizeStartFree.y0) / base;
+      const targetDx = (Math.abs(rawDx) < 0.15 ? 0 : rawDx * WS_FREE_RESIZE_SENS);
+      const targetDy = (Math.abs(rawDy) < 0.15 ? 0 : rawDy * WS_FREE_RESIZE_SENS);
+      wsFreeResizeDeltaRef.current.dx = wsFreeResizeDeltaRef.current.dx + (targetDx - wsFreeResizeDeltaRef.current.dx) * WS_RESIZE_SMOOTH;
+      wsFreeResizeDeltaRef.current.dy = wsFreeResizeDeltaRef.current.dy + (targetDy - wsFreeResizeDeltaRef.current.dy) * WS_RESIZE_SMOOTH;
+      const dxMm = wsFreeResizeDeltaRef.current.dx;
+      const dyMm = wsFreeResizeDeltaRef.current.dy;
+      setWsItems(arr => arr.map(it => {
+        if (it.id !== wsResizingFreeId) return it;
+        if (it.type === 'text') {
+          return {
+            ...it,
+            wrapWidthMm: Math.max(20, (wsResizeStartFree.wrapMm || 60) + dxMm),
+            fontMm: Math.max(2, (wsResizeStartFree.fontMm || 4) + dyMm)
+          };
+        }
+        if (it.type === 'line') {
+          return {
+            ...it,
+            widthMm: Math.max(5, (wsResizeStartFree.wMm || it.widthMm || 40) + dxMm),
+            heightMm: Math.max(0.2, (wsResizeStartFree.hMm || it.heightMm || 0.6) + dyMm/4)
+          };
+        }
+        const maxW = Math.max(10, labelWidth - it.x - 1);
+        const maxH = Math.max(5, labelHeight - it.y - 1);
+        return {
+          ...it,
+          widthMm: Math.min(maxW, Math.max(10, (wsResizeStartFree.wMm || it.widthMm || 40) + dxMm)),
+          heightMm: Math.min(maxH, Math.max(5, (wsResizeStartFree.hMm || it.heightMm || 12) + dyMm))
+        };
+      }));
+    };
+    const onUp = () => { setWsResizingFreeId(null); wsFreeResizeDeltaRef.current = { dx:0, dy:0 }; };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+  }, [showFreeWorkspace, wsResizingFreeId, wsResizeStartFree, wsZoom, labelWidth, labelHeight]);
+
+  // Büyük önizleme açıldığında mevcut serbest öğeleri içeri al
+  useEffect(() => {
+    if (!showFreeWorkspace) return;
+    setWsItems(freeItems);
+    // Küçük önizlemeyi de eşitle (serbest öğeler görünür olsun)
+    setFreeMode(true);
+    setFreeItems(() => [...freeItems]);
+    setTimeout(() => { try { renderZPLPreview(); generateZPL(); } catch {} }, 0);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showFreeWorkspace]);
 
   // Taslak yönetimi
   type TemplateRow = { id: string; name: string; data: any; thumbnail?: string };
@@ -762,12 +933,15 @@ const LabelGenerator: React.FC = () => {
           const sorted = [...freeItems].sort((a,b)=> (a.zIndex||0) - (b.zIndex||0));
           for (const item of sorted) {
             if (item.type === 'text' && item.text) {
-              ctx.font = `${mmToPx(item.fontMm || 4)}px Arial`;
+              const fontMm = item.fontMm || 4;
+              ctx.font = `${mmToPx(fontMm)}px Arial`;
               const left = mmToPx(item.x);
               const top = mmToPx(item.y);
               const w = mmToPx(item.wrapWidthMm || (labelWidth - item.x - 6));
               const maxH = mmToPx(labelHeight - item.y - 2);
-              wrapText(item.text, left, top, w, mmToPx(4), maxH);
+              // Satır yüksekliğini fonta bağlı tutarak üst üste binmeyi engelle
+              const lineHeightPx = mmToPx(fontMm * 1.15);
+              wrapText(item.text, left, top, w, lineHeightPx, maxH);
             } else if (item.type === 'barcode' && item.text) {
               const ean = toEAN13(item.text);
               if (ean) {
@@ -1198,6 +1372,21 @@ const LabelGenerator: React.FC = () => {
             
             {/* Action Buttons */}
             <div className="flex gap-2 flex-wrap items-center justify-end">
+            {/* Seçili öge için büyüt/küçült düğmeleri */}
+            {selectedFreeId && freeMode && (
+              <div className="flex gap-1 border border-gray-300 rounded-md">
+                <button 
+                  className="px-2 py-1 text-sm rounded-l-md bg-gray-50 hover:bg-gray-100" 
+                  onClick={()=>adjustSelectedFreeSize(-1)} 
+                  title="Küçült"
+                >−</button>
+                <button 
+                  className="px-2 py-1 text-sm rounded-r-md bg-gray-50 hover:bg-gray-100" 
+                  onClick={()=>adjustSelectedFreeSize(1)} 
+                  title="Büyüt"
+                >＋</button>
+              </div>
+            )}
             <button
                 type="button"
                 onClick={()=>setShowLabelSettings(true)}
@@ -1232,11 +1421,16 @@ const LabelGenerator: React.FC = () => {
                 <Printer className="w-4 h-4 mr-1" />
                 Yazdır
               </button>
+              <button
+                type="button"
+                onClick={()=>{ setWsItems(freeItems); setShowFreeWorkspace(true); }}
+                className="px-3 py-1.5 text-sm rounded-md border bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
+                title="Büyük Önizleme"
+              >Büyük Önizleme</button>
             </div>
           </div>
 
         {/* Canvas Preview + Drag Anchors */}
-          {labelType && (
           <PreviewCanvas
             canvasRef={canvasRef}
             overlayRef={overlayRef}
@@ -1269,7 +1463,7 @@ const LabelGenerator: React.FC = () => {
             setRemoveTarget={setRemoveTarget}
             setRemoveFreeId={setRemoveFreeId}
             setResizingFreeIdGlobal={setResizingFreeIdGlobal}
-          />)}
+          />
           {activeTab==='standart' && (
             <div className="mt-3">
               <div className="text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">Öğe Ekle</div>
@@ -1532,10 +1726,15 @@ const LabelGenerator: React.FC = () => {
         {showFreeWorkspace && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center">
             <div className="absolute inset-0 bg-black/40" onClick={()=>setShowFreeWorkspace(false)} />
-            <div className="relative bg-white dark:bg-gray-800 w-full max-w-5xl rounded-lg shadow-2xl p-4 z-[101]">
+            <div className="relative bg-white dark:bg-gray-800 w-full max-w-7xl h-[85vh] rounded-lg shadow-2xl p-4 z-[101] overflow-auto">
               <div className="flex items-center justify-between mb-3">
                 <h4 className="text-lg font-semibold">Serbest Etiket Tasarımı</h4>
                 <div className="flex items-center gap-2">
+                  {/* Seçili öğe büyüt/küçült */}
+                  <div className="flex items-center gap-1 mr-2">
+                    <button className="px-2 py-1 text-sm rounded border" onClick={()=>adjustSelectedSize(-1)} title="Küçült">−</button>
+                    <button className="px-2 py-1 text-sm rounded border" onClick={()=>adjustSelectedSize(1)} title="Büyüt">＋</button>
+                  </div>
                   <button className="px-3 py-1.5 text-sm rounded border" onClick={()=>{ setFreeEditContext('workspace'); setEditingFreeId(null); setFreeDraft({ type:'text', text:'Yeni Metin', fontMm:4, wrapWidthMm:60, x:6, y:6 }); setShowFreeDialog(true); }}>Metin</button>
                   <button className="px-3 py-1.5 text-sm rounded border" onClick={()=>{ setFreeEditContext('workspace'); setEditingFreeId(null); setFreeDraft({ type:'barcode', text:'5901234123457', widthMm:60, heightMm:12, x:6, y:20 }); setShowFreeDialog(true); }}>Barkod</button>
                   <input ref={imageInputRef} type="file" accept="image/*" className="hidden" onChange={(e)=>{ const f=e.target.files?.[0]; if(!f) return; const r=new FileReader(); r.onload=()=>{ setFreeEditContext('workspace'); setEditingFreeId(null); setFreeDraft({ type:'image', src:String(r.result), widthMm:30, heightMm:12, x:6, y:10 }); setShowFreeDialog(true); }; r.readAsDataURL(f); e.currentTarget.value=''; }} />
@@ -1547,15 +1746,185 @@ const LabelGenerator: React.FC = () => {
                     <button className="px-2 py-1 bg-gray-200 rounded" onClick={()=>setWsZoom(z=>Math.min(3, Number((z+0.1).toFixed(2))))}>+</button>
                     <span className="w-10 text-right">{Math.round(wsZoom*100)}%</span>
                   </div>
-                  <button className="px-3 py-1.5 text-sm rounded bg-emerald-600 text-white" onClick={()=>{ setFreeMode(true); setFreeItems(wsItems); setShowFreeWorkspace(false); setShowPreview(true); setTimeout(()=>renderZPLPreview(),0); }}>Önizlemeye Aktar</button>
-                  <button className="px-3 py-1.5 text-sm rounded bg-gray-200" onClick={()=>setShowFreeWorkspace(false)}>Kapat</button>
+                  <button className="px-3 py-1.5 text-sm rounded bg-emerald-600 text-white" onClick={()=>{ 
+                    setFreeMode(true); 
+                    setFreeItems([...wsItems]); 
+                    setShowFreeWorkspace(false); 
+                    setShowPreview(true); 
+                    setTimeout(()=>{ 
+                      try { 
+                        renderZPLPreview(); 
+                        generateZPL(); 
+                        // Force state update
+                        setFreeItems(prev => [...prev]);
+                      } catch {} 
+                    }, 100); 
+                  }}>Kaydet ve Kapat</button>
+                  <button className="px-3 py-1.5 text-sm rounded bg-gray-200" onClick={()=>{ 
+                    setFreeMode(true); 
+                    setFreeItems([...wsItems]); 
+                    setShowFreeWorkspace(false); 
+                    setShowPreview(true); 
+                    setTimeout(()=>{ 
+                      try { 
+                        renderZPLPreview(); 
+                        generateZPL(); 
+                        // Force state update
+                        setFreeItems(prev => [...prev]);
+                      } catch {} 
+                    }, 100); 
+                  }}>Kapat</button>
                 </div>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 relative">
-                <div className="md:col-span-2">
+              <div className="grid grid-cols-1 gap-4 relative">
+                <div>
                   <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-4">
-                    <div className="w-full max-w-lg mx-auto bg-white dark:bg-gray-800 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-md p-4 relative">
-                      <canvas ref={wsCanvasRef} className="w-full h-auto border border-gray-300" style={{ width: `${labelWidth * 3.78 * wsZoom}px`, height: `${labelHeight * 3.78 * wsZoom}px`, maxWidth: '100%' }} />
+                    <div ref={wsContainerRef} className="w-full max-w-[1400px] mx-auto bg-white dark:bg-gray-800 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-md p-4 relative overflow-auto">
+                      <canvas ref={wsCanvasRef} className="w-full h-auto border border-gray-300" style={{ width: `${labelWidth * 3.78 * wsZoom}px`, height: `${labelHeight * 3.78 * wsZoom}px` }} />
+                      {/* Standart öğeler overlay */}
+                      <div className="absolute inset-4 pointer-events-none select-none">
+                        {(['title','productName','details','barcode'] as const).filter(k=>effectiveVisible[k]).map((key)=> (
+                          <div
+                            key={key}
+                            className="absolute bg-red-500/10 border border-red-500 text-[10px] text-red-700 rounded pointer-events-auto z-20"
+                            style={{
+                              left: `${anchors[key].x * 3.78 * wsZoom}px`,
+                              top: `${anchors[key].y * 3.78 * wsZoom}px`,
+                              width: (() => {
+                                const base = 3.78 * wsZoom;
+                                if (key==='productName') return `${styles.productName.wrapWidth * base}px`;
+                                if (key==='barcode') return `${styles.barcode.widthMm * base}px`;
+                                if (key==='details') return `${styles.details.widthMm * base}px`;
+                                return `${styles.title.widthMm * base}px`;
+                              })(),
+                              height: (() => {
+                                const base = 3.78 * wsZoom;
+                                if (key==='title') return `${(styles.title.font + 2) * base}px`;
+                                if (key==='productName') return `${(styles.productName.font * 2 + styles.details.lineGap) * base}px`;
+                                if (key==='details') return `${(styles.details.lineGap * 6) * base}px`;
+                                return `${(styles.barcode.height + 8) * base}px`;
+                              })(),
+                              cursor: 'move'
+                            }}
+                            onMouseDown={(e) => {
+                              setWsDraggingAnchorKey(key);
+                              setWsSelectedAnchorKey(key);
+                              const rect = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
+                              setWsDragOffset({ dx: e.clientX - (rect.left + anchors[key].x * 3.78 * wsZoom), dy: e.clientY - (rect.top + anchors[key].y * 3.78 * wsZoom) });
+                            }}
+                            onMouseUp={() => setWsDraggingAnchorKey(null)}
+                            onMouseMove={(e) => {
+                              if (wsDraggingAnchorKey !== key) return;
+                              const parent = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
+                              const base = 3.78 * wsZoom;
+                              let x = (e.clientX - parent.left - wsDragOffset.dx) / base;
+                              let y = (e.clientY - parent.top - wsDragOffset.dy) / base;
+                              if (snapToGrid) { const g = gridMm; x = Math.round(x/g)*g; y = Math.round(y/g)*g; }
+                              setAnchors(prev => ({ ...prev, [key]: { x: Math.max(0, Math.min(labelWidth-5, x)), y: Math.max(0, Math.min(labelHeight-5, y)) } }));
+                            }}
+                            onMouseLeave={() => setWsDraggingAnchorKey(null)}
+                          >
+                            <div className="absolute left-1 top-1 text-[10px] px-1 py-0.5 bg-white/60 rounded">{key}</div>
+                            {/* İçerik önizleme (sadece görsel amaçlı) */}
+                            {key==='title' && (
+                              <div className="absolute inset-1 overflow-hidden pointer-events-none">
+                                {logoImages[selectedCompany] ? (
+                                  <img
+                                    src={(logoImages as any)[selectedCompany]?.src || ''}
+                                    alt={selectedCompany}
+                                    className="h-full object-contain"
+                                    style={{ maxWidth: '100%', maxHeight: `${(styles.title.font + 4) * 3.78 * wsZoom}px` }}
+                                  />
+                                ) : (
+                                  <div
+                                    className="text-black"
+                                    style={{ fontSize: `${styles.title.font * 3.78 * wsZoom}px`, lineHeight: 1 as any }}
+                                  >
+                                    {selectedCompany}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                            {key==='productName' && labelData.productName && (
+                              <div
+                                className="absolute inset-1 overflow-hidden pointer-events-none text-black"
+                                style={{ fontSize: `${styles.productName.font * 3.78 * wsZoom}px`, lineHeight: `${Math.max(1, styles.details.lineGap * 3.78 * wsZoom)}px` }}
+                              >
+                                {labelData.productName}
+                              </div>
+                            )}
+                            {key==='details' && (
+                              <div
+                                className="absolute inset-1 overflow-hidden pointer-events-none text-black"
+                                style={{ fontSize: `${styles.details.font * 3.78 * wsZoom}px`, lineHeight: `${Math.max(12, styles.details.lineGap * 3.78 * wsZoom)}px` }}
+                              >
+                                {labelData.amount && (<div>Miktar: {labelData.amount}</div>)}
+                                {labelData.serialNumber && (<div>Seri: {labelData.serialNumber}</div>)}
+                                {labelData.batchNumber && (<div>Parti: {labelData.batchNumber}</div>)}
+                                {labelData.invoiceNumber && (<div>İrsaliye: {labelData.invoiceNumber}</div>)}
+                                {labelData.entryDate && (<div>Giriş: {labelData.entryDate}</div>)}
+                                {labelData.expiryDate && (<div>SKT: {labelData.expiryDate}</div>)}
+                                {labelData.supplier && (<div>Tedarikçi: {labelData.supplier}</div>)}
+                              </div>
+                            )}
+                            {key==='barcode' && labelData.barcode && (
+                              <div className="absolute inset-1 flex flex-col justify-end pointer-events-none">
+                                <div
+                                  className="w-full"
+                                  style={{
+                                    height: `${Math.max(8, (styles.barcode.height || 12) * 3.78 * wsZoom * 0.7)}px`,
+                                    backgroundImage: 'repeating-linear-gradient(90deg, #111 0, #111 2px, transparent 2px, transparent 4px)'
+                                  }}
+                                />
+                                <div className="text-[10px] text-black text-center mt-1 select-none">
+                                  {String(labelData.barcode)}
+                                </div>
+                              </div>
+                            )}
+                            <div
+                              className="absolute right-0 bottom-0 w-3 h-3 bg-blue-600 cursor-se-resize"
+                              onMouseDown={(e) => {
+                                e.stopPropagation();
+                                setWsResizingAnchorKey(key);
+                                const parent = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
+                                setWsResizeStart({
+                                  x0: e.clientX,
+                                  y0: e.clientY,
+                                  wMm: parseFloat(((parent.width)/(3.78*wsZoom)).toFixed(2)),
+                                  hMm: parseFloat(((parent.height)/(3.78*wsZoom)).toFixed(2)),
+                                  productFont: styles.productName.font,
+                                  productWrap: styles.productName.wrapWidth,
+                                  titleFont: styles.title.font,
+                                  detailsGap: styles.details.lineGap,
+                                  detailsFont: styles.details.font,
+                                  bcHeight: styles.barcode.height
+                                });
+                              }}
+                              onMouseMove={(e) => {
+                                if (wsResizingAnchorKey !== key) return;
+                                const base = 3.78 * wsZoom;
+                                const rawDx = (e.clientX - wsResizeStart.x0) / base;
+                                const rawDy = (e.clientY - wsResizeStart.y0) / base;
+                                const targetDx = (Math.abs(rawDx) < 0.15 ? 0 : rawDx * WS_RESIZE_SENS);
+                                const targetDyRaw = (Math.abs(rawDy) < 0.15 ? 0 : rawDy * WS_RESIZE_SENS);
+                                wsResizeDeltaRef.current.dx = wsResizeDeltaRef.current.dx + (targetDx - wsResizeDeltaRef.current.dx) * WS_RESIZE_SMOOTH;
+                                wsResizeDeltaRef.current.dy = wsResizeDeltaRef.current.dy + (targetDyRaw - wsResizeDeltaRef.current.dy) * WS_RESIZE_SMOOTH;
+                                const dxMm = wsResizeDeltaRef.current.dx;
+                                const dyMm = (key==='details' ? wsResizeDeltaRef.current.dy/2 : wsResizeDeltaRef.current.dy);
+                                setStyles(s => {
+                                  if (key==='productName') return { ...s, productName: { ...s.productName, wrapWidth: Math.max(20, wsResizeStart.productWrap + dxMm), font: Math.max(2, wsResizeStart.productFont + dyMm) } };
+                                  if (key==='title') return { ...s, title: { ...s.title, widthMm: Math.max(10, wsResizeStart.wMm + dxMm), font: Math.max(2, wsResizeStart.titleFont + dyMm) } };
+                                  if (key==='details') return { ...s, details: { ...s.details, widthMm: Math.max(20, wsResizeStart.wMm + dxMm), lineGap: Math.max(2, wsResizeStart.detailsGap + dyMm/2), font: Math.max(2, wsResizeStart.detailsFont + dyMm/2) } };
+                                  if (key==='barcode') return { ...s, barcode: { ...s.barcode, widthMm: Math.max(20, wsResizeStart.wMm + dxMm), height: Math.max(5, wsResizeStart.bcHeight + dyMm) } };
+                                  return s;
+                                });
+                              }}
+                              onMouseUp={() => setWsResizingAnchorKey(null)}
+                              onMouseLeave={() => setWsResizingAnchorKey(null)}
+                            />
+                          </div>
+                        ))}
+                      </div>
                       {/* Serbest öğe overlay */}
                       <div className="absolute inset-4 pointer-events-none select-none">
                         {wsItems.map((item) => (
@@ -1566,11 +1935,28 @@ const LabelGenerator: React.FC = () => {
                               left: `${item.x * 3.78 * wsZoom}px`,
                               top: `${item.y * 3.78 * wsZoom}px`,
                               width: `${((item.type==='text' ? (item.wrapWidthMm || 60) : (item.widthMm || 40)) * 3.78 * wsZoom)}px`,
-                              height: `${(item.heightMm || (item.type==='text' ? (item.fontMm||4)+6 : 12)) * 3.78 * wsZoom}px`,
+                              height: `${(() => {
+                                if (item.type==='text') {
+                                  const font = item.fontMm || 4;
+                                  const wrap = item.wrapWidthMm || 60;
+                                  const text = item.text || '';
+                                  const charW = font * 0.55; // yaklaşık karakter genişliği mm
+                                  const maxChars = Math.max(1, Math.floor(wrap / charW));
+                                  const words = text.split(/\s+/).filter(Boolean);
+                                  let lines = 1; let lineLen = 0;
+                                  for (const w of words) { const need=(lineLen>0?1:0)+w.length; if (lineLen + need > maxChars) { lines++; lineLen = w.length; } else { lineLen += need; } }
+                                  const lineHeightMm = font * 1.15;
+                                  const calc = Math.max(font + 2, lines * lineHeightMm);
+                                  return calc * 3.78 * wsZoom;
+                                }
+                                return (item.heightMm || 12) * 3.78 * wsZoom;
+                              })()}px`,
                               cursor: 'move',
                               zIndex: 1000
                             }}
                             onMouseDown={(e) => {
+                              setSelectedFreeId(item.id);
+                              setWsSelectedAnchorKey(null);
                               setDragKey('title');
                               const rect = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
                               setDragOffset({ dx: e.clientX - (rect.left + item.x * 3.78 * wsZoom), dy: e.clientY - (rect.top + item.y * 3.78 * wsZoom) });
@@ -1594,7 +1980,10 @@ const LabelGenerator: React.FC = () => {
                               {item.type === 'text' && (
                                 <div
                                   className="absolute inset-1 overflow-hidden text-black pointer-events-none"
-                                  style={{ fontSize: `${(item.fontMm || 4) * 3.78 * wsZoom}px`, lineHeight: 1.1 as any }}
+                                  style={{
+                                    fontSize: `${(item.fontMm || 4) * 3.78 * wsZoom}px`,
+                                    lineHeight: `${(item.fontMm || 4) * 3.78 * wsZoom * 1.15}px`
+                                  }}
                                 >
                                   {item.text}
                                 </div>
@@ -1623,18 +2012,20 @@ const LabelGenerator: React.FC = () => {
                               )}
                             <div className="absolute right-0 bottom-0 w-3 h-3 bg-purple-600 cursor-se-resize"
                               onMouseDown={(e)=>{
-                                e.stopPropagation(); setResizingKey('productName'); const parent=(e.currentTarget.parentElement as HTMLElement).getBoundingClientRect(); setResizeStart({ x0:e.clientX, y0:e.clientY, wMm: parseFloat(((parent.width)/(3.78*wsZoom)).toFixed(2)), hMm: parseFloat(((parent.height)/(3.78*wsZoom)).toFixed(2)), productFont: item.fontMm||4, productWrap: item.wrapWidthMm||60, titleFont:0, detailsGap:0, detailsFont:0, bcHeight:item.heightMm||12, bcScale:1 }); (e.currentTarget as any).dataset.freeId=item.id; }}
-                              onMouseMove={(e)=>{ if(resizingKey!=='productName') return; const freeId=(e.currentTarget as any).dataset.freeId; if(!freeId) return; const dxMm=(e.clientX-resizeStart.x0)/(3.78*wsZoom); const dyMm=(e.clientY-resizeStart.y0)/(3.78*wsZoom); setWsItems(arr=>arr.map(it=>{ if(it.id!==freeId) return it; if(it.type==='text'){ return { ...it, wrapWidthMm: Math.max(20,(it.wrapWidthMm||60)+dxMm), fontMm: Math.max(2,(it.fontMm||4)+dyMm) }; } return { ...it, widthMm: Math.max(10,(it.widthMm||40)+dxMm), heightMm: Math.max(5,(it.heightMm||12)+dyMm) }; })); }}
-                              onMouseUp={()=>setResizingKey(null)} onMouseLeave={()=>setResizingKey(null)} />
+                                e.stopPropagation();
+                                setResizingKey('productName');
+                                const parent=(e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
+                                setResizeStart({ x0:e.clientX, y0:e.clientY, wMm: parseFloat(((parent.width)/(3.78*wsZoom)).toFixed(2)), hMm: parseFloat(((parent.height)/(3.78*wsZoom)).toFixed(2)), productFont: item.fontMm||4, productWrap: item.wrapWidthMm||60, titleFont:0, detailsGap:0, detailsFont:0, bcHeight:item.heightMm||12, bcScale:1 });
+                                setWsResizingFreeId(item.id);
+                                setWsResizeStartFree({ x0:e.clientX, y0:e.clientY, wMm: item.widthMm||40, hMm: item.heightMm||12, fontMm: item.fontMm||4, wrapMm: item.wrapWidthMm||60 });
+                              }}
+                              onMouseUp={()=>{ setResizingKey(null); setWsResizingFreeId(null); }}
+                              onMouseLeave={()=>{ setResizingKey(null); setWsResizingFreeId(null); }} />
                           </div>
                         ))}
                       </div>
                     </div>
                   </div>
-                </div>
-                {/* Özellikler paneli basit hali */}
-                <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-4">
-                  <div className="text-sm text-gray-600 dark:text-gray-300">Bu pencere boş etiket üzerinde serbest öğeleri düzenlemek içindir. Öğelere çift tıklayarak detaylarını düzenleyebilirsiniz. Bittiğinde “Önizlemeye Aktar”a basın.</div>
                 </div>
               </div>
             </div>
@@ -1652,6 +2043,13 @@ const LabelGenerator: React.FC = () => {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Büyük Önizleme Dialogu */}
+        {showPreview && (
+          <div className="fixed inset-0 z-[90] pointer-events-none">
+            {/* boş; ana önizleme zaten sayfada */}
           </div>
         )}
         {/* Kaydet/Güncelle Onayı */}
