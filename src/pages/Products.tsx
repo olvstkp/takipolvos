@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Search, Plus, Edit, Trash2, Save, X, Package, DollarSign, Tag, Box, Upload, Settings, Download } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Search, Plus, Edit, Trash2, Save, X, Package, DollarSign, Tag, Box, Upload, Settings, Download, ImagePlus } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useProductTypes, useProformaGroups } from '../hooks/useProforma';
 import toast from 'react-hot-toast';
@@ -30,6 +30,20 @@ interface ProformaGroup {
     name: string;
 }
 
+interface ProductImage {
+    id: string;
+    product_id: string;
+    image_url: string;
+    image_order: number;
+    alt_text?: string;
+    is_primary: boolean;
+    file_size_bytes?: number;
+    file_type?: string;
+    width_px?: number;
+    height_px?: number;
+    uploading?: boolean; // Flag for temporary upload state
+}
+
 interface Product {
   id: string;
   name: string;
@@ -48,6 +62,10 @@ interface Product {
     size_unit?: string;
     product_type?: ProductType;
     proforma_group?: ProformaGroup;
+    catalog_visible?: boolean;
+    catalog_description?: string;
+    catalog_sort_order?: number;
+    product_images?: ProductImage[];
 }
 
 const Products: React.FC = () => {
@@ -68,12 +86,16 @@ const Products: React.FC = () => {
     const [selectedSeries, setSelectedSeries] = useState<string>('all');
   const [showAddModal, setShowAddModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
-  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
-  const [deleteConfirmation, setDeleteConfirmation] = useState<{show: boolean, product: Product | null}>({show: false, product: null});
-      const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
+      const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+    const [deleteConfirmation, setDeleteConfirmation] = useState<{show: boolean, product: Product | null}>({show: false, product: null});
+
+    const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
     const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
     const [showSeriesManagement, setShowSeriesManagement] = useState(false);
     const [showProformaGroupsManagement, setShowProformaGroupsManagement] = useState(false);
+    
+    // Scroll position preservation for modal
+    const [scrollPosition, setScrollPosition] = useState(0);
 
     // Fetch products and series
     const fetchData = async () => {
@@ -91,7 +113,7 @@ const Products: React.FC = () => {
             if (seriesError) throw seriesError;
             setSeries(seriesData || []);
 
-            // Fetch products with series
+            // Fetch products with series and images
             const { data: productsData, error: productsError } = await supabase
                 .from('products')
                 .select(`
@@ -104,6 +126,17 @@ const Products: React.FC = () => {
                         packaging_weight_kg_per_case,
                         description,
                         is_active
+                    ),
+                    product_images (
+                        id,
+                        image_url,
+                        image_order,
+                        alt_text,
+                        is_primary,
+                        file_size_bytes,
+                        file_type,
+                        width_px,
+                        height_px
                     )
                 `)
                 .eq('is_active', true)
@@ -133,6 +166,8 @@ const Products: React.FC = () => {
         const matchesSeries = selectedSeries === 'all' || product.series_id === selectedSeries;
         return matchesSearch && matchesSeries;
   });
+
+
 
     // Add/Update product
     const handleSaveProduct = async (productData: Partial<Product>) => {
@@ -176,7 +211,11 @@ const Products: React.FC = () => {
                 setProducts(prevProducts => 
                     prevProducts.map(p => 
                         p.id === editingProduct.id 
-                            ? updated
+                            ? {
+                                ...updated,
+                                proforma_group_id: productData.proforma_group_id || null,
+                                proforma_group: proformaGroups.find(pg => pg.id === productData.proforma_group_id) || null
+                            }
                             : p
                     )
                 );
@@ -212,8 +251,12 @@ const Products: React.FC = () => {
                 if (error) throw error;
                 productId = data?.id;
                 
-                // Add to local state immediately
-                setProducts(prevProducts => [...prevProducts, data]);
+                // Add to local state immediately with proforma group info
+                setProducts(prevProducts => [...prevProducts, {
+                    ...data,
+                    proforma_group_id: productData.proforma_group_id || null,
+                    proforma_group: proformaGroups.find(pg => pg.id === productData.proforma_group_id) || null
+                }]);
             }
 
             // Save proforma group assignment to both Supabase and localStorage
@@ -238,7 +281,70 @@ const Products: React.FC = () => {
                 console.log('⚠️ No group assignment to save:', { productId, groupId: productData.proforma_group_id });
             }
 
-            // Show success toast
+            // Save product images
+            if (productId && productData.images && productData.images.length > 0) {
+                console.log('💾 Saving product images:', productData.images);
+                
+                // First, delete existing images for this product
+                if (editingProduct) {
+                    const { error: deleteError } = await supabase
+                        .from('product_images')
+                        .delete()
+                        .eq('product_id', productId);
+                    
+                    if (deleteError) {
+                        console.error('❌ Error deleting existing images:', deleteError);
+                    }
+                }
+
+                // Save all images to database (both new and existing)
+                if (productData.images.length > 0) {
+                    const imagesToInsert = productData.images.map((img) => ({
+                        product_id: productId,
+                        image_url: img.image_url, // Now contains Supabase Storage URLs
+                        image_order: img.image_order,
+                        is_primary: img.is_primary,
+                        alt_text: img.alt_text,
+                        file_size_bytes: img.file_size_bytes,
+                        file_type: img.file_type,
+                        width_px: img.width_px,
+                        height_px: img.height_px
+                    }));
+
+                    const { error: insertError } = await supabase
+                        .from('product_images')
+                        .insert(imagesToInsert);
+
+                    if (insertError) {
+                        console.error('❌ Error saving images:', insertError);
+                        toast.error('Görseller kaydedilemedi!');
+                    } else {
+                        console.log('✅ Product images saved successfully');
+                        
+                        // Update local state with images
+                        if (editingProduct) {
+                            setProducts(prevProducts => 
+                                prevProducts.map(p => 
+                                    p.id === productId 
+                                        ? { ...p, product_images: productData.images }
+                                        : p
+                                )
+                            );
+                        } else {
+                            // For new products, update the recently added product
+                            setProducts(prevProducts => 
+                                prevProducts.map(p => 
+                                    p.id === productId 
+                                        ? { ...p, product_images: productData.images }
+                                        : p
+                                )
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Show success toast and close modal
             if (editingProduct) {
                 toast.success('Ürün başarıyla güncellendi!', {
                     duration: 3000,
@@ -251,8 +357,19 @@ const Products: React.FC = () => {
                 });
             }
             
-            // Don't close modal automatically - let user close it manually
-            // Data will be refreshed when modal is closed
+            // Close modal automatically after successful save
+            setShowAddModal(false);
+            setEditingProduct(null);
+            
+            // Restore scroll position after a brief delay to ensure DOM is updated
+            setTimeout(() => {
+                if (scrollPosition > 0) {
+                    window.scrollTo({
+                        top: scrollPosition,
+                        behavior: 'smooth'
+                    });
+                }
+            }, 100);
         } catch (err: any) {
             alert(`Hata: ${err.message}`);
         }
@@ -664,9 +781,36 @@ const Products: React.FC = () => {
                     />
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap w-80">
-                                        <div className="text-sm font-medium text-gray-900 dark:text-white">
-                                            {product.name}
-                    </div>
+                                        <div className="flex items-center space-x-3">
+                                            {/* Product Image Thumbnail */}
+                                            <div className="flex-shrink-0 w-12 h-12">
+                                                {product.product_images && product.product_images.length > 0 ? (
+                                                    <img
+                                                        src={product.product_images.find(img => img.is_primary)?.image_url || product.product_images[0]?.image_url}
+                                                        alt={product.name}
+                                                        className="w-12 h-12 rounded-lg object-cover border border-gray-200 dark:border-gray-600"
+                                                        onError={(e) => {
+                                                            const target = e.target as HTMLImageElement;
+                                                            target.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiBmaWxsPSIjRjNGNEY2Ii8+CjxwYXRoIGQ9Ik0yNCAzMkMyOC40MTgzIDMyIDMyIDI4LjQxODMgMzIgMjRDMzIgMTkuNTgxNyAyOC40MTgzIDE2IDI0IDE2QzE5LjU4MTcgMTYgMTYgMTkuNTgxNyAxNiAyNEMxNiAyOC40MTgzIDE5LjU4MTcgMzIgMjQgMzJaIiBmaWxsPSIjRTVFN0VCIi8+CjxwYXRoIGQ9Ik0yNCAxOEMyNy4zMTM3IDE4IDMwIDIwLjY4NjMgMzAgMjRDMzAgMjcuMzEzNyAyNy4zMTM3IDMwIDI0IDMwQzIwLjY4NjMgMzAgMTggMjcuMzEzNyAxOCAyNEMxOCAyMC42ODYzIDIwLjY4NjMgMTggMjQgMThaIiBmaWxsPSIjOUI5QkE0Ii8+CjxwYXRoIGQ9Ik0yNCAyMEMyNi4yMDkxIDIwIDI4IDIxLjc5MDkgMjggMjRDMjggMjYuMjA5MSAyNi4yMDkxIDI4IDI0IDI4QzIxLjc5MDkgMjggMjAgMjYuMjA5MSAyMCAyNEMyMCAyMS43OTA5IDIxLjc5MDkgMjAgMjQgMjBaIiBmaWxsPSIjRDFENURCIi8+Cjwvc3ZnPgo=';
+                                                        }}
+                                                    />
+                                                ) : (
+                                                    <div className="w-12 h-12 bg-gray-100 dark:bg-gray-700 rounded-lg flex items-center justify-center border border-gray-200 dark:border-gray-600">
+                                                        <Package className="w-6 h-6 text-gray-400 dark:text-gray-500" />
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div>
+                                                <div className="text-sm font-medium text-gray-900 dark:text-white">
+                                                    {product.name}
+                                                </div>
+                                                {product.product_images && product.product_images.length > 0 && (
+                                                    <div className="text-xs text-gray-500 dark:text-gray-400">
+                                                        {product.product_images.length} görsel
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap w-40">
                                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
@@ -719,6 +863,8 @@ const Products: React.FC = () => {
                     <div className="flex space-x-2">
                       <button
                         onClick={() => {
+                          // Save current scroll position
+                          setScrollPosition(window.scrollY);
                           setEditingProduct(product);
                           setShowAddModal(true);
                         }}
@@ -753,10 +899,20 @@ const Products: React.FC = () => {
                     groupsLoading={groupsLoading}
                     onSave={handleSaveProduct}
                     onProformaGroupAdded={handleProformaGroupAdded}
+                    scrollPosition={scrollPosition}
           onClose={() => {
-            // No need to fetch data - local state is already updated
             setShowAddModal(false);
             setEditingProduct(null);
+            
+            // Restore scroll position when modal is manually closed
+            setTimeout(() => {
+                if (scrollPosition > 0) {
+                    window.scrollTo({
+                        top: scrollPosition,
+                        behavior: 'smooth'
+                    });
+                }
+            }, 100);
           }}
         />
       )}
@@ -916,9 +1072,10 @@ interface ProductModalProps {
     onSave: (productData: Partial<Product>) => void;
     onClose: () => void;
     onProformaGroupAdded?: (newGroup: ProformaGroup) => void;
+    scrollPosition?: number;
 }
 
-const ProductModal: React.FC<ProductModalProps> = ({ product, series, proformaGroups, groupsLoading, onSave, onClose, onProformaGroupAdded }) => {
+const ProductModal: React.FC<ProductModalProps> = ({ product, series, productTypes, proformaGroups, groupsLoading, onSave, onClose, onProformaGroupAdded, scrollPosition }) => {
     const [formData, setFormData] = useState({
         name: product?.name || '',
         series_id: product?.series_id || '',
@@ -928,8 +1085,15 @@ const ProductModal: React.FC<ProductModalProps> = ({ product, series, proformaGr
         price_per_piece_usd: product?.price_per_piece_usd || 0,
         barcode: product?.barcode || '',
         is_active: product?.is_active ?? true,
-        proforma_group_id: product?.proforma_group_id || ''
+        proforma_group_id: product?.proforma_group_id || '',
+        images: product?.product_images || []
     });
+
+    // Image upload states
+    const [uploading, setUploading] = useState(false);
+    const [previewImage, setPreviewImage] = useState<ProductImage | null>(null);
+    const [imageDeleteConfirm, setImageDeleteConfirm] = useState<{show: boolean, image: ProductImage | null}>({show: false, image: null});
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
     // Yeni seri ekleme state'leri
     const [showAddSeriesModal, setShowAddSeriesModal] = useState(false);
@@ -970,7 +1134,8 @@ const ProductModal: React.FC<ProductModalProps> = ({ product, series, proformaGr
             price_per_piece_usd: product?.price_per_piece_usd || 0,
             barcode: product?.barcode || '',
             is_active: product?.is_active ?? true,
-            proforma_group_id: product?.proforma_group_id || ''
+            proforma_group_id: product?.proforma_group_id || '',
+            images: product?.product_images || []
         });
     }, [product]);
 
@@ -1114,6 +1279,254 @@ const ProductModal: React.FC<ProductModalProps> = ({ product, series, proformaGr
         }
     };
 
+    // Handle image upload to Supabase Storage
+    const handleImageUpload = async (files: FileList | null) => {
+        if (!files || files.length === 0) return;
+        
+        const file = files[0];
+        const maxSize = 5 * 1024 * 1024; // 5MB
+        
+        // Validation
+        if (file.size > maxSize) {
+            toast.error('Dosya boyutu 5MB\'dan küçük olmalıdır');
+            return;
+        }
+        
+        if (!file.type.startsWith('image/')) {
+            toast.error('Sadece resim dosyaları yükleyebilirsiniz');
+            return;
+        }
+        
+        if (formData.images.length >= 3) {
+            toast.error('Maksimum 3 görsel ekleyebilirsiniz');
+            return;
+        }
+        
+        setUploading(true);
+        
+        try {
+            // Create unique filename
+            const timestamp = Date.now();
+            const fileExtension = file.name.split('.').pop() || 'jpg';
+            const fileName = `product_${timestamp}_${Math.random().toString(36).substr(2, 9)}.${fileExtension}`;
+            const filePath = `products/${fileName}`;
+            
+            console.log('📤 Uploading file to Supabase Storage:', filePath);
+            
+            // Create preview URL immediately using FileReader for instant feedback
+            const tempPreviewUrl = URL.createObjectURL(file);
+            
+            // Add temporary image to UI immediately for smooth experience
+            const tempImage: ProductImage = {
+                id: `temp_${timestamp}`,
+                product_id: product?.id || '',
+                image_url: tempPreviewUrl,
+                image_order: formData.images.length + 1,
+                is_primary: formData.images.length === 0, // Only first image is primary by default
+                file_size_bytes: file.size,
+                file_type: file.type,
+                width_px: undefined,
+                height_px: undefined,
+                alt_text: formData.name,
+                uploading: true // Flag to show this is uploading
+            };
+            
+            // Immediately update UI with temporary image
+            setFormData(prev => ({
+                ...prev,
+                images: [...prev.images, tempImage]
+            }));
+            
+            // Upload to Supabase Storage in background
+            const { data: uploadData, error: uploadError } = await supabase.storage
+                .from('product-images')
+                .upload(filePath, file, {
+                    cacheControl: '3600',
+                    upsert: false
+                });
+            
+            if (uploadError) {
+                console.error('❌ Storage upload error:', uploadError);
+                // Remove temporary image on error
+                setFormData(prev => ({
+                    ...prev,
+                    images: prev.images.filter(img => img.id !== `temp_${timestamp}`)
+                }));
+                throw uploadError;
+            }
+            
+            console.log('✅ File uploaded successfully:', uploadData);
+            
+            // Get public URL
+            const { data: urlData } = supabase.storage
+                .from('product-images')
+                .getPublicUrl(filePath);
+            
+            const publicUrl = urlData.publicUrl;
+            console.log('🔗 Public URL generated:', publicUrl);
+            
+            // Get image dimensions in background using Promise-based approach
+            const getImageDimensions = (url: string): Promise<{width: number, height: number}> => {
+                return new Promise((resolve, reject) => {
+                    const img = new Image();
+                    img.onload = () => resolve({ width: img.width, height: img.height });
+                    img.onerror = () => reject(new Error('Failed to load image'));
+                    img.src = url;
+                });
+            };
+            
+            // Get dimensions and update the temporary image with real URL
+            try {
+                const dimensions = await getImageDimensions(publicUrl);
+                
+                // Update the temporary image with real URL and dimensions
+                setFormData(prev => ({
+                    ...prev,
+                    images: prev.images.map(img => 
+                        img.id === `temp_${timestamp}` 
+                            ? {
+                                ...img,
+                                image_url: publicUrl,
+                                width_px: dimensions.width,
+                                height_px: dimensions.height,
+                                uploading: false
+                            }
+                            : img
+                    )
+                }));
+                
+                // Clean up temporary preview URL
+                URL.revokeObjectURL(tempPreviewUrl);
+                
+                toast.success('Görsel başarıyla yüklendi!');
+                
+            } catch (dimensionError) {
+                // If dimension loading fails, still update with real URL
+                setFormData(prev => ({
+                    ...prev,
+                    images: prev.images.map(img => 
+                        img.id === `temp_${timestamp}` 
+                            ? {
+                                ...img,
+                                image_url: publicUrl,
+                                uploading: false
+                            }
+                            : img
+                    )
+                }));
+                
+                // Clean up temporary preview URL
+                URL.revokeObjectURL(tempPreviewUrl);
+                
+                toast.success('Görsel yüklendi!');
+            }
+            
+        } catch (error: any) {
+            console.error('❌ Upload error:', error);
+            toast.error(`Görsel yüklenirken hata oluştu: ${error.message}`);
+        } finally {
+            setUploading(false);
+        }
+    };
+
+    // Handle file input click
+    const handleAddImageClick = () => {
+        fileInputRef.current?.click();
+    };
+
+    // Handle setting primary image
+    const handleSetPrimaryImage = (imageId: string) => {
+        setFormData(prev => ({
+            ...prev,
+            images: prev.images.map(img => ({
+                ...img,
+                is_primary: img.id === imageId
+            }))
+        }));
+        toast.success('Ana görsel değiştirildi!');
+    };
+
+    // Show image delete confirmation
+    const handleDeleteImageClick = (imageId: string) => {
+        const imageToDelete = formData.images.find(img => img.id === imageId);
+        if (!imageToDelete) return;
+        setImageDeleteConfirm({show: true, image: imageToDelete});
+    };
+
+    // Handle confirmed image deletion
+    const handleConfirmDeleteImage = async () => {
+        if (!imageDeleteConfirm.image) return;
+        
+        const imageId = imageDeleteConfirm.image.id;
+        const imageToDelete = imageDeleteConfirm.image;
+        
+        try {
+            // If it's a real database image (not temp), delete from database first
+            if (!imageId.startsWith('temp_')) {
+                console.log('🗑️ Deleting from database:', imageId);
+                
+                const { error: dbDeleteError } = await supabase
+                    .from('product_images')
+                    .delete()
+                    .eq('id', imageId);
+                
+                if (dbDeleteError) {
+                    console.error('❌ Database delete error:', dbDeleteError);
+                    toast.error('Veritabanından silinirken hata oluştu');
+                    return; // Don't proceed if database delete fails
+                }
+                
+                // If it's a real storage image, also delete from storage
+                if (imageToDelete.image_url && imageToDelete.image_url.includes('supabase')) {
+                    // Extract file path from URL
+                    const url = new URL(imageToDelete.image_url);
+                    const pathParts = url.pathname.split('/');
+                    const filePath = pathParts.slice(-2).join('/'); // Get "products/filename.ext"
+                    
+                    console.log('🗑️ Deleting from storage:', filePath);
+                    
+                    const { error: storageDeleteError } = await supabase.storage
+                        .from('product-images')
+                        .remove([filePath]);
+                    
+                    if (storageDeleteError) {
+                        console.error('❌ Storage delete error:', storageDeleteError);
+                        // Don't throw error, image already deleted from database
+                    }
+                }
+            }
+            
+            // Remove from form data and handle primary image logic
+            setFormData(prev => {
+                const updatedImages = prev.images.filter(img => img.id !== imageId);
+                
+                // If we deleted the primary image and there are other images, make the first one primary
+                if (imageToDelete.is_primary && updatedImages.length > 0) {
+                    updatedImages[0] = { ...updatedImages[0], is_primary: true };
+                }
+                
+                return {
+                    ...prev,
+                    images: updatedImages
+                };
+            });
+            
+            toast.success('Görsel silindi');
+            
+        } catch (error: any) {
+            console.error('❌ Delete error:', error);
+            toast.error('Görsel silinirken hata oluştu');
+        } finally {
+            // Close confirmation dialog
+            setImageDeleteConfirm({show: false, image: null});
+        }
+    };
+
+    // Cancel image deletion
+    const handleCancelDeleteImage = () => {
+        setImageDeleteConfirm({show: false, image: null});
+    };
+
     return (
         <>
             <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -1123,12 +1536,23 @@ const ProductModal: React.FC<ProductModalProps> = ({ product, series, proformaGr
                             {product ? 'Ürün Düzenle' : 'Yeni Ürün Ekle'}
                         </h3>
                         <button
-                            onClick={onClose}
-                            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                            onClick={uploading ? undefined : onClose}
+                            disabled={uploading}
+                            className={`text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 ${uploading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            title={uploading ? 'Görsel yükleniyor, lütfen bekleyin...' : ''}
                         >
                             <X className="w-5 h-5" />
                         </button>
-    </div>
+                        </div>
+
+                    {/* Hidden File Input */}
+                    <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handleImageUpload(e.target.files)}
+                        className="hidden"
+                    />
 
                     <form onSubmit={handleSubmit} className="space-y-4">
                         <div>
@@ -1233,7 +1657,157 @@ const ProductModal: React.FC<ProductModalProps> = ({ product, series, proformaGr
                             )}
                         </div>
 
-                        
+                        {/* Product Images Section */}
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+                                Ürün Görselleri
+                            </label>
+                            
+                            {/* Current Images Display - Horizontal Layout */}
+                            {formData.images && formData.images.length > 0 && (
+                                <div className="mb-4">
+                                    <div className="flex gap-3 overflow-x-auto pb-2">
+                                        {formData.images
+                                            .sort((a, b) => a.image_order - b.image_order)
+                                            .map((image, index) => (
+                                            <div key={image.id} className="relative group flex-shrink-0">
+                                                <div 
+                                                    className={`w-20 h-20 bg-gray-100 dark:bg-gray-700 rounded-lg overflow-hidden border-2 transition-colors ${
+                                                        image.uploading 
+                                                            ? 'border-blue-500 border-dashed' 
+                                                            : 'border-gray-200 dark:border-gray-600 cursor-pointer hover:border-blue-400'
+                                                    }`}
+                                                    onClick={image.uploading ? undefined : () => setPreviewImage(image)}
+                                                    title={image.uploading ? 'Görsel yükleniyor...' : 'Görseli büyük görmek için tıklayın'}
+                                                >
+                                                    <img
+                                                        src={image.image_url}
+                                                        alt={image.alt_text || `Ürün görseli ${index + 1}`}
+                                                        className={`w-full h-full object-cover ${image.uploading ? 'opacity-70' : ''}`}
+                                                        onError={(e) => {
+                                                            const target = e.target as HTMLImageElement;
+                                                            target.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODAiIGhlaWdodD0iODAiIHZpZXdCb3g9IjAgMCA4MCA4MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiBmaWxsPSIjRjNGNEY2Ii8+CjxwYXRoIGQ9Ik00MCA1NkM0OC44MzY2IDU2IDU2IDQ4LjgzNjYgNTYgNDBDNTYgMzEuMTYzNCA0OC44MzY2IDI0IDQwIDI0QzMxLjE2MzQgMjQgMjQgMzEuMTYzNCAyNCA0MEMyNCA0OC44MzY2IDMxLjE2MzQgNTYgNDAgNTZaIiBmaWxsPSIjRTVFN0VCIi8+CjxwYXRoIGQ9Ik00MCAyOEM0Ni42Mjc0IDI4IDUyIDMzLjM3MjYgNTIgNDBDNTIgNDYuNjI3NCA0Ni42Mjc0IDUyIDQwIDUyQzMzLjM3MjYgNTIgMjggNDYuNjI3NCAyOCA0MEMyOCAzMy4zNzI2IDMzLjM3MjYgMjggNDAgMjhaIiBmaWxsPSIjOUI5QkE0Ii8+Cjwvc3ZnPgo=';
+                                                        }}
+                                                    />
+                                                    {/* Uploading overlay */}
+                                                    {image.uploading && (
+                                                        <div className="absolute inset-0 bg-blue-500 bg-opacity-20 flex items-center justify-center">
+                                                            <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                <div className="absolute top-1 left-1">
+                                                    <span className="bg-blue-600 text-white text-xs px-1.5 py-0.5 rounded text-[10px]">
+                                                        {index + 1}
+                                                    </span>
+                                                </div>
+                                                {image.is_primary && (
+                                                    <div className="absolute top-1 right-1">
+                                                        <span className="bg-green-600 text-white text-xs px-1.5 py-0.5 rounded text-[10px]">
+                                                            Ana
+                                                        </span>
+                                                    </div>
+                                                )}
+                                                {!image.uploading && (
+                                                    <>
+                                                        {/* Ana görsel yapma butonu */}
+                                                        {!image.is_primary && (
+                                                            <div className="absolute -top-1 -left-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleSetPrimaryImage(image.id)}
+                                                                    className="bg-yellow-500 text-white p-1 rounded-full hover:bg-yellow-600 w-5 h-5 flex items-center justify-center"
+                                                                    title="Ana Görsel Yap"
+                                                                >
+                                                                    <span className="text-[10px] font-bold">★</span>
+                                                                </button>
+                                                            </div>
+                                                        )}
+                                                        {/* Silme butonu */}
+                                                        <div className="absolute -top-1 -right-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                                                                                    <button
+                                                            type="button"
+                                                            onClick={() => handleDeleteImageClick(image.id)}
+                                                            className="bg-red-600 text-white p-1 rounded-full hover:bg-red-700 w-5 h-5 flex items-center justify-center"
+                                                            title="Görseli Sil"
+                                                        >
+                                                            <X className="w-2.5 h-2.5" />
+                                                        </button>
+                                                        </div>
+                                                    </>
+                                                )}
+                                                <div className="mt-1 text-[10px] text-gray-500 dark:text-gray-400 text-center max-w-20 truncate">
+                                                    {image.uploading ? 'Yükleniyor...' : (image.file_type && image.file_type.toUpperCase())}
+                                                </div>
+                                            </div>
+                                        ))}
+                                        
+                                        {/* Add New Image Placeholder */}
+                                        {formData.images.length < 3 && (
+                                            <div 
+                                                onClick={uploading ? undefined : handleAddImageClick}
+                                                className={`w-20 h-20 bg-gray-50 dark:bg-gray-700 rounded-lg border-2 border-dashed border-gray-300 dark:border-gray-600 flex flex-col items-center justify-center transition-colors flex-shrink-0 ${uploading ? 'cursor-not-allowed opacity-50' : 'hover:border-blue-500 dark:hover:border-blue-400 cursor-pointer'}`}
+                                            >
+                                                {uploading ? (
+                                                    <>
+                                                        <div className="animate-spin w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full mb-1"></div>
+                                                        <span className="text-[10px] text-blue-500 text-center">
+                                                            Yükleniyor...
+                                                        </span>
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <ImagePlus className="w-6 h-6 text-gray-400 dark:text-gray-500 mb-1" />
+                                                        <span className="text-[10px] text-gray-500 dark:text-gray-400 text-center">
+                                                            Ekle
+                                                        </span>
+                                                    </>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+                            
+                            {/* No Images State - Compact */}
+                            {(!formData.images || formData.images.length === 0) && (
+                                <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-4 text-center">
+                                    <div className="flex items-center justify-center gap-4">
+                                        <div className="flex flex-col items-center">
+                                            <div className="w-8 h-8 bg-gray-100 dark:bg-gray-700 rounded-lg flex items-center justify-center mb-2">
+                                                <Package className="w-4 h-4 text-gray-400 dark:text-gray-500" />
+                                            </div>
+                                            <span className="text-xs text-gray-500 dark:text-gray-400">
+                                                Görsel yok
+                                            </span>
+                                        </div>
+                                        <div className="text-center">
+                                            <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
+                                                Maksimum 3 görsel ekleyebilirsiniz
+                                            </p>
+                                            <button
+                                                type="button"
+                                                onClick={uploading ? undefined : handleAddImageClick}
+                                                disabled={uploading}
+                                                className="inline-flex items-center px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md text-xs font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                title={uploading ? 'Görsel yükleniyor, lütfen bekleyin...' : ''}
+                                            >
+                                                {uploading ? (
+                                                    <div className="animate-spin w-3 h-3 border border-gray-400 border-t-transparent rounded-full mr-1"></div>
+                                                ) : (
+                                                    <ImagePlus className="w-3 h-3 mr-1" />
+                                                )}
+                                                {uploading ? 'Yükleniyor...' : 'İlk Görseli Ekle'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                            
+                            <div className="mt-3 text-xs text-gray-500 dark:text-gray-400">
+                                💡 İpucu: İlk görsel otomatik olarak ana görsel olur. Görseller katalogda ve ürün listesinde görünür.
+                            </div>
+                        </div>
 
                         <div className="grid grid-cols-2 gap-4">
                             <div>
@@ -1339,17 +1913,21 @@ const ProductModal: React.FC<ProductModalProps> = ({ product, series, proformaGr
                         <div className="flex justify-end space-x-3 pt-6">
                             <button
                                 type="button"
-                                onClick={onClose}
-                                className="px-4 py-2 text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700"
+                                onClick={uploading ? undefined : onClose}
+                                disabled={uploading}
+                                className="px-4 py-2 text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                                title={uploading ? 'Görsel yükleniyor, lütfen bekleyin...' : ''}
                             >
                                 İptal
                             </button>
                             <button
                                 type="submit"
-                                className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                                disabled={uploading}
+                                className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                                title={uploading ? 'Görsel yükleniyor, lütfen bekleyin...' : ''}
                             >
                                 <Save className="w-4 h-4 mr-2" />
-                                {product ? 'Güncelle' : 'Kaydet'}
+                                {uploading ? 'Yükleniyor...' : (product ? 'Güncelle' : 'Kaydet')}
                             </button>
                         </div>
                     </form>
@@ -1554,6 +2132,140 @@ const ProductModal: React.FC<ProductModalProps> = ({ product, series, proformaGr
                                     Grup Ekle
                                 </button>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Image Preview Modal */}
+            {previewImage && (
+                <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-[70]" onClick={() => setPreviewImage(null)}>
+                    <div className="relative max-w-4xl max-h-[90vh] mx-4" onClick={(e) => e.stopPropagation()}>
+                        <button
+                            onClick={() => setPreviewImage(null)}
+                            className="absolute -top-10 right-0 text-white hover:text-gray-300 z-10"
+                            title="Kapat"
+                        >
+                            <X className="w-8 h-8" />
+                        </button>
+                        <img
+                            src={previewImage.image_url}
+                            alt={previewImage.alt_text || 'Ürün görseli'}
+                            className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl"
+                            onError={(e) => {
+                                const target = e.target as HTMLImageElement;
+                                target.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAwIiBoZWlnaHQ9IjQwMCIgdmlld0JveD0iMCAwIDQwMCA0MDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSI0MDAiIGhlaWdodD0iNDAwIiBmaWxsPSIjRjNGNEY2Ii8+CjxwYXRoIGQ9Ik0yMDAgMjgwQzI0MC4wIDI4MCAyODAgMjQwLjAgMjgwIDIwMEMyODAgMTYwLjAgMjQwLjAgMTIwIDIwMCAxMjBDMTYwLjAgMTIwIDEyMCAxNjAuMCAxMjAgMjAwQzEyMCAyNDAuMCAxNjAuMCAyODAgMjAwIDI4MFoiIGZpbGw9IiNFNUU3RUIiLz4KPHA=' ;
+                            }}
+                        />
+                        <div className="absolute bottom-0 left-0 right-0 bg-black bg-opacity-50 text-white p-4 rounded-b-lg">
+                            <div className="flex justify-between items-center">
+                                <div>
+                                    <h4 className="font-medium">{formData.name}</h4>
+                                    <p className="text-sm text-gray-300">
+                                        {previewImage.is_primary && '🏷️ Ana görsel'} 
+                                        {previewImage.file_type && ` • ${previewImage.file_type.toUpperCase()}`}
+                                        {previewImage.width_px && previewImage.height_px && 
+                                            ` • ${previewImage.width_px}×${previewImage.height_px}px`
+                                        }
+                                    </p>
+                                </div>
+                                <div className="flex space-x-2">
+                                    {!previewImage.is_primary && (
+                                        <button
+                                            onClick={() => {
+                                                handleSetPrimaryImage(previewImage.id);
+                                                setPreviewImage(null);
+                                            }}
+                                            className="bg-yellow-500 hover:bg-yellow-600 text-white px-3 py-1 rounded text-sm"
+                                            title="Ana Görsel Yap"
+                                        >
+                                            ★ Ana Yap
+                                        </button>
+                                    )}
+                                    <button
+                                        onClick={() => {
+                                            handleDeleteImageClick(previewImage.id);
+                                            setPreviewImage(null);
+                                        }}
+                                        className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-sm"
+                                        title="Görseli Sil"
+                                    >
+                                        Sil
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Image Delete Confirmation Dialog */}
+            {imageDeleteConfirm.show && imageDeleteConfirm.image && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[80]">
+                    <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-md">
+                        <div className="flex items-center justify-between mb-6">
+                            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Görsel Silme Onayı</h3>
+                            <button
+                                onClick={handleCancelDeleteImage}
+                                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        <div className="mb-6">
+                            <div className="flex items-center mb-4">
+                                <div className="flex-shrink-0 w-16 h-16 bg-gray-100 dark:bg-gray-700 rounded-lg overflow-hidden border-2 border-gray-200 dark:border-gray-600">
+                                    <img
+                                        src={imageDeleteConfirm.image.image_url}
+                                        alt="Silinecek görsel"
+                                        className="w-full h-full object-cover"
+                                        onError={(e) => {
+                                            const target = e.target as HTMLImageElement;
+                                            target.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHZpZXdCb3g9IjAgMCA2NCA2NCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiBmaWxsPSIjRjNGNEY2Ii8+CjxwYXRoIGQ9Ik0zMiA0NEMzOC42Mjc0IDQ0IDQ0IDM4LjYyNzQgNDQgMzJDNDQgMjUuMzcyNiAzOC42Mjc0IDIwIDMyIDIwQzI1LjM3MjYgMjAgMjAgMjUuMzcyNiAyMCAzMkMyMCAzOC42Mjc0IDI1LjM3MjYgNDQgMzIgNDRaIiBmaWxsPSIjRTVFN0VCIi8+Cjwvc3ZnPgo=';
+                                        }}
+                                    />
+                                </div>
+                                <div className="ml-4">
+                                    <h4 className="text-lg font-medium text-gray-900 dark:text-white">Görseli Sil</h4>
+                                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                                        {imageDeleteConfirm.image.is_primary && (
+                                            <span className="text-orange-600 dark:text-orange-400 font-medium">⚠️ Ana görsel</span>
+                                        )}
+                                        {imageDeleteConfirm.image.file_type && (
+                                            <span className="ml-2">{imageDeleteConfirm.image.file_type.toUpperCase()}</span>
+                                        )}
+                                    </p>
+                                </div>
+                            </div>
+                            
+                            <p className="text-gray-600 dark:text-gray-400 mb-4">
+                                Bu görseli silmek istediğinizden emin misiniz?
+                            </p>
+                            
+                            {imageDeleteConfirm.image.is_primary && (
+                                <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3">
+                                    <p className="text-sm text-yellow-700 dark:text-yellow-300">
+                                        ⚠️ Bu ana görseldir. Silinirse, varsa başka bir görsel otomatik olarak ana görsel olacaktır.
+                                    </p>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="flex justify-end space-x-3">
+                            <button
+                                onClick={handleCancelDeleteImage}
+                                className="px-4 py-2 text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700"
+                            >
+                                İptal
+                            </button>
+                            <button
+                                onClick={handleConfirmDeleteImage}
+                                className="flex items-center px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
+                            >
+                                <X className="w-4 h-4 mr-2" />
+                                Görseli Sil
+                            </button>
                         </div>
                     </div>
                 </div>
