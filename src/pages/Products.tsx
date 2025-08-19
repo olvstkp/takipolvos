@@ -52,6 +52,8 @@ interface Product {
     price_per_piece: number;
     price_per_case_usd?: number;
     price_per_piece_usd?: number;
+    price_per_case_tl?: number;
+    price_per_piece_tl?: number;
     barcode?: string;
     is_active: boolean;
     created_at: string;
@@ -75,7 +77,7 @@ const Products: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
     const { productTypes } = useProductTypes();
     const { proformaGroups, setProformaGroups, loading: groupsLoading, setProductGroupAssignment } = useProformaGroups();
-    const [selectedCurrency, setSelectedCurrency] = useState<'EUR' | 'USD'>('EUR');
+    const [selectedCurrency, setSelectedCurrency] = useState<'EUR' | 'USD' | 'TL'>('EUR');
     
     // Debug: Proforma groups yüklendiğinde console'a yazdır
     useEffect(() => {
@@ -86,10 +88,10 @@ const Products: React.FC = () => {
     const [selectedSeries, setSelectedSeries] = useState<string>('all');
   const [showAddModal, setShowAddModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
-      const [editingProduct, setEditingProduct] = useState<Product | null>(null);
-    const [deleteConfirmation, setDeleteConfirmation] = useState<{show: boolean, product: Product | null}>({show: false, product: null});
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState<{show: boolean, product: Product | null}>({show: false, product: null});
 
-    const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
+      const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
     const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
     const [showSeriesManagement, setShowSeriesManagement] = useState(false);
     const [showProformaGroupsManagement, setShowProformaGroupsManagement] = useState(false);
@@ -185,6 +187,8 @@ const Products: React.FC = () => {
                         price_per_piece: productData.price_per_piece,
                         price_per_case_usd: productData.price_per_case_usd,
                         price_per_piece_usd: productData.price_per_piece_usd,
+                        price_per_case_tl: productData.price_per_case_tl,
+                        price_per_piece_tl: productData.price_per_piece_tl,
                         barcode: productData.barcode,
                         is_active: productData.is_active,
                         proforma_group_id: productData.proforma_group_id || null
@@ -230,6 +234,8 @@ const Products: React.FC = () => {
                         price_per_piece: productData.price_per_piece,
                         price_per_case_usd: productData.price_per_case_usd,
                         price_per_piece_usd: productData.price_per_piece_usd,
+                        price_per_case_tl: productData.price_per_case_tl,
+                        price_per_piece_tl: productData.price_per_piece_tl,
                         barcode: productData.barcode,
                         is_active: productData.is_active,
                         proforma_group_id: productData.proforma_group_id || null
@@ -487,6 +493,7 @@ const Products: React.FC = () => {
                     const defaultPiecesPerCase = 12;
                     const price_per_case = product.price_per_piece * defaultPiecesPerCase;
                     const price_per_case_usd = product.price_per_piece_usd * defaultPiecesPerCase;
+                    const price_per_case_tl = product.price_per_piece_tl * defaultPiecesPerCase;
 
                     const { data, error } = await supabase
                         .from('products')
@@ -494,8 +501,10 @@ const Products: React.FC = () => {
                             name: product.name.trim(),
                             price_per_piece: product.price_per_piece,
                             price_per_piece_usd: product.price_per_piece_usd,
+                            price_per_piece_tl: product.price_per_piece_tl,
                             price_per_case: price_per_case,
                             price_per_case_usd: price_per_case_usd,
+                            price_per_case_tl: price_per_case_tl,
                             is_active: true
                         })
                         .select('id, name')
@@ -682,12 +691,29 @@ const Products: React.FC = () => {
                             <DollarSign className="w-6 h-6 text-purple-600 dark:text-purple-400" />
             </div>
             <div className="ml-4">
-                            <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Ortalama Fiyat (Koli)</p>
+                            <p className="text-sm font-medium text-gray-600 dark:text-gray-400">
+                                Ortalama Fiyat (Koli)
+                                {selectedCurrency === 'EUR' ? ' (€)' : selectedCurrency === 'USD' ? ' ($)' : ' (₺)'}
+                            </p>
                             <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                                {selectedCurrency === 'EUR' 
-                                  ? `€${products.length > 0 ? (products.reduce((sum, p) => sum + p.price_per_case, 0) / products.length).toFixed(2) : '0.00'}`
-                                  : `$${products.length > 0 ? (products.reduce((sum, p) => sum + (p.price_per_case_usd || p.price_per_case * 1.1), 0) / products.length).toFixed(2) : '0.00'}`
-                                }
+                                {(() => {
+                                    const count = products.length;
+                                    if (count === 0) return selectedCurrency === 'EUR' ? '€0.00' : selectedCurrency === 'USD' ? '$0.00' : '₺0.00';
+                                    if (selectedCurrency === 'EUR') {
+                                        const avg = products.reduce((sum, p) => sum + p.price_per_case, 0) / count;
+                                        return `€${avg.toFixed(2)}`;
+                                    }
+                                    if (selectedCurrency === 'USD') {
+                                        const usdValues = products.map(p => p.price_per_case_usd).filter(v => v != null) as number[];
+                                        if (usdValues.length === 0) return '—';
+                                        const avg = usdValues.reduce((s, v) => s + v, 0) / usdValues.length;
+                                        return `$${avg.toFixed(2)}`;
+                                    }
+                                    const tlValues = products.map(p => p.price_per_case_tl).filter(v => v != null) as number[];
+                                    if (tlValues.length === 0) return '—';
+                                    const avg = tlValues.reduce((s, v) => s + v, 0) / tlValues.length;
+                                    return `₺${avg.toFixed(2)}`;
+                                })()}
                             </p>
             </div>
           </div>
@@ -733,11 +759,12 @@ const Products: React.FC = () => {
           </select>
           <select
             value={selectedCurrency}
-            onChange={(e) => setSelectedCurrency(e.target.value as 'EUR' | 'USD')}
+            onChange={(e) => setSelectedCurrency(e.target.value as 'EUR' | 'USD' | 'TL')}
             className="px-4 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           >
             <option value="EUR">€ EUR</option>
             <option value="USD">$ USD</option>
+            <option value="TL">₺ TL</option>
           </select>
         </div>
       </div>
@@ -760,10 +787,10 @@ const Products: React.FC = () => {
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider w-40">Seri</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider w-48">PROFORMA GRUBU</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider w-32">
-                                    Koli Fiyatı ({selectedCurrency === 'EUR' ? '€' : '$'})
+                                    Koli Fiyatı ({selectedCurrency === 'EUR' ? '€' : selectedCurrency === 'USD' ? '$' : '₺'})
                                 </th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider w-32">
-                                    Adet Fiyatı ({selectedCurrency === 'EUR' ? '€' : '$'})
+                                    Adet Fiyatı ({selectedCurrency === 'EUR' ? '€' : selectedCurrency === 'USD' ? '$' : '₺'})
                                 </th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider w-24">Durum</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider w-32">İşlemler</th>
@@ -801,8 +828,8 @@ const Products: React.FC = () => {
                                                 )}
                                             </div>
                                             <div>
-                                                <div className="text-sm font-medium text-gray-900 dark:text-white">
-                                                    {product.name}
+                                        <div className="text-sm font-medium text-gray-900 dark:text-white">
+                                            {product.name}
                                                 </div>
                                                 {product.product_images && product.product_images.length > 0 && (
                                                     <div className="text-xs text-gray-500 dark:text-gray-400">
@@ -810,7 +837,7 @@ const Products: React.FC = () => {
                                                     </div>
                                                 )}
                                             </div>
-                                        </div>
+                    </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap w-40">
                                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
@@ -841,13 +868,25 @@ const Products: React.FC = () => {
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white w-32">
                     {selectedCurrency === 'EUR' 
                       ? `€${product.price_per_case.toFixed(2)}`
-                      : `$${(product.price_per_case_usd || product.price_per_case * 1.1).toFixed(2)}`
+                      : selectedCurrency === 'USD'
+                      ? (product.price_per_case_usd != null
+                          ? `$${product.price_per_case_usd.toFixed(2)}`
+                          : '—')
+                      : (product.price_per_case_tl != null
+                          ? `₺${product.price_per_case_tl.toFixed(2)}`
+                          : '—')
                     }
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white w-32">
                     {selectedCurrency === 'EUR' 
                       ? `€${product.price_per_piece.toFixed(2)}`
-                      : `$${(product.price_per_piece_usd || product.price_per_piece * 1.1).toFixed(2)}`
+                      : selectedCurrency === 'USD'
+                      ? (product.price_per_piece_usd != null
+                          ? `$${product.price_per_piece_usd.toFixed(2)}`
+                          : '—')
+                      : (product.price_per_piece_tl != null
+                          ? `₺${product.price_per_piece_tl.toFixed(2)}`
+                          : '—')
                     }
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap w-24">
@@ -1083,6 +1122,8 @@ const ProductModal: React.FC<ProductModalProps> = ({ product, series, productTyp
         price_per_piece: product?.price_per_piece || 0,
         price_per_case_usd: product?.price_per_case_usd || 0,
         price_per_piece_usd: product?.price_per_piece_usd || 0,
+        price_per_case_tl: product?.price_per_case_tl || 0,
+        price_per_piece_tl: product?.price_per_piece_tl || 0,
         barcode: product?.barcode || '',
         is_active: product?.is_active ?? true,
         proforma_group_id: product?.proforma_group_id || '',
@@ -1132,6 +1173,8 @@ const ProductModal: React.FC<ProductModalProps> = ({ product, series, productTyp
             price_per_piece: product?.price_per_piece || 0,
             price_per_case_usd: product?.price_per_case_usd || 0,
             price_per_piece_usd: product?.price_per_piece_usd || 0,
+            price_per_case_tl: product?.price_per_case_tl || 0,
+            price_per_piece_tl: product?.price_per_piece_tl || 0,
             barcode: product?.barcode || '',
             is_active: product?.is_active ?? true,
             proforma_group_id: product?.proforma_group_id || '',
@@ -1150,7 +1193,7 @@ const ProductModal: React.FC<ProductModalProps> = ({ product, series, productTyp
         return piecePrice * selectedSeries.pieces_per_case;
     };
 
-    const handlePiecePriceChange = (piecePrice: number, currency: 'EUR' | 'USD') => {
+    const handlePiecePriceChange = (piecePrice: number, currency: 'EUR' | 'USD' | 'TL') => {
         console.log('Piece price changed:', piecePrice, 'Currency:', currency, 'Series:', selectedSeries);
         const casePrice = calculateCasePriceFromPiece(piecePrice);
         console.log('Calculated case price:', casePrice);
@@ -1161,14 +1204,31 @@ const ProductModal: React.FC<ProductModalProps> = ({ product, series, productTyp
                 price_per_piece: piecePrice,
                 price_per_case: casePrice
             }));
-        } else {
+        } else if (currency === 'USD') {
             setFormData(prev => ({
                 ...prev,
                 price_per_piece_usd: piecePrice,
                 price_per_case_usd: casePrice
             }));
+        } else {
+            setFormData(prev => ({
+                ...prev,
+                price_per_piece_tl: piecePrice,
+                price_per_case_tl: casePrice
+            }));
         }
     };
+
+    // Seri değişince (adet/koli) tüm kurlar için koli fiyatlarını yeniden hesapla
+    useEffect(() => {
+        if (!selectedSeries) return;
+        setFormData(prev => ({
+            ...prev,
+            price_per_case: prev.price_per_piece ? prev.price_per_piece * selectedSeries.pieces_per_case : prev.price_per_case,
+            price_per_case_usd: prev.price_per_piece_usd ? prev.price_per_piece_usd * selectedSeries.pieces_per_case : prev.price_per_case_usd,
+            price_per_case_tl: prev.price_per_piece_tl ? prev.price_per_piece_tl * selectedSeries.pieces_per_case : prev.price_per_case_tl,
+        }));
+    }, [selectedSeries?.pieces_per_case]);
 
     // Yeni seri ekleme fonksiyonu
     const handleAddSeries = async () => {
@@ -1543,7 +1603,7 @@ const ProductModal: React.FC<ProductModalProps> = ({ product, series, productTyp
                         >
                             <X className="w-5 h-5" />
                         </button>
-                        </div>
+    </div>
 
                     {/* Hidden File Input */}
                     <input
@@ -1878,6 +1938,44 @@ const ProductModal: React.FC<ProductModalProps> = ({ product, series, productTyp
                                         const value = e.target.value.replace(',', '.');
                                         const numValue = parseFloat(value) || 0;
                                         setFormData({ ...formData, price_per_case_usd: numValue });
+                                    }}
+                                    className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                    required
+                                />
+                            </div>
+                        </div>
+
+                        {/* TL Fiyatları */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                    Adet Fiyatı (₺)
+                                </label>
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    value={formData.price_per_piece_tl}
+                                    onChange={(e) => {
+                                        const value = e.target.value.replace(',', '.');
+                                        const numValue = parseFloat(value) || 0;
+                                        handlePiecePriceChange(numValue, 'TL');
+                                    }}
+                                    className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                    required
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                    Koli Fiyatı (₺) {selectedSeries && <span className="text-xs text-gray-500">({selectedSeries.pieces_per_case} adet - Otomatik hesaplanır)</span>}
+                                </label>
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    value={formData.price_per_case_tl}
+                                    onChange={(e) => {
+                                        const value = e.target.value.replace(',', '.');
+                                        const numValue = parseFloat(value) || 0;
+                                        setFormData({ ...formData, price_per_case_tl: numValue });
                                     }}
                                     className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                                     required
