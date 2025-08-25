@@ -112,6 +112,40 @@ export type Database = {
         Insert: Omit<Database['public']['Tables']['pallets']['Row'], 'id' | 'created_at'>;
         Update: Partial<Database['public']['Tables']['pallets']['Insert']>;
       };
+      orders: {
+        Row: {
+          id: string;
+          order_number: string;
+          order_date: string;
+          company_name: string;
+          contact_person: string;
+          email: string;
+          phone: string;
+          country: string;
+          additional_message?: string;
+          total_items: number;
+          estimated_value: number;
+          currency: string;
+          status: string;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Omit<Database['public']['Tables']['orders']['Row'], 'id' | 'created_at' | 'updated_at'>;
+        Update: Partial<Database['public']['Tables']['orders']['Insert']>;
+      };
+      order_items: {
+        Row: {
+          id: string;
+          order_id: string;
+          product_id: string;
+          quantity: number;
+          unit_price: number;
+          total_price: number;
+          created_at: string;
+        };
+        Insert: Omit<Database['public']['Tables']['order_items']['Row'], 'id' | 'created_at'>;
+        Update: Partial<Database['public']['Tables']['order_items']['Insert']>;
+      };
     };
   };
 }; 

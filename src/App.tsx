@@ -12,6 +12,7 @@ import ProductionRecords from './pages/ProductionRecords';
 import SoapBaseProduction from './pages/SoapBaseProduction';
 import OilTanks from './pages/OilTanks';
 import Proforma from './pages/Proforma';
+import Orders from './pages/Orders';
 import Products from './pages/Products';
 import CustomerManagement from './pages/CustomerManagement';
 import LabelGenerator from './pages/LabelGenerator';
@@ -34,6 +35,7 @@ function App() {
           <Route path="/soap-base" element={<SoapBaseProduction />} />
           <Route path="/oil-tanks" element={<OilTanks />} />
           <Route path="/proforma" element={<Proforma />} />
+          <Route path="/orders" element={<Orders />} />
           <Route path="/products" element={<Products />} />
           <Route path="/customers" element={<CustomerManagement />} />
           <Route path="/labels" element={<LabelGenerator />} />
