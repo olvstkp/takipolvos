@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import { Plus, Search, Eye, Edit, Trash2, Package, Calendar, User, MapPin, DollarSign, Download, Mail, AlertCircle } from 'lucide-react';
+import { Plus, Search, Eye, Edit, Trash2, Package, Calendar, User, MapPin, DollarSign, Download, Mail, AlertCircle, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -45,6 +45,7 @@ const Orders: React.FC = () => {
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [editFormData, setEditFormData] = useState<Partial<Order>>({});
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   const statusOptions = [
     { value: 'all', label: 'Tümü' },
@@ -171,6 +172,8 @@ const Orders: React.FC = () => {
   const handleConfirmDelete = async () => {
     if (!selectedOrder) return;
 
+    setDeleteLoading(true);
+    
     try {
       // First delete order items
       const { error: itemsError } = await supabase
@@ -198,6 +201,8 @@ const Orders: React.FC = () => {
     } catch (error) {
       console.error('Error deleting order:', error);
       toast.error('Sipariş silinirken hata oluştu');
+    } finally {
+      setDeleteLoading(false);
     }
   };
 
@@ -846,15 +851,18 @@ const Orders: React.FC = () => {
               <div className="flex justify-end space-x-3">
                 <button
                   onClick={() => setShowDeleteModal(false)}
-                  className="px-4 py-2 text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-600 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-md"
+                  disabled={deleteLoading}
+                  className="px-4 py-2 text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-600 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-md disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   İptal
                 </button>
                 <button
                   onClick={handleConfirmDelete}
-                  className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-md"
+                  disabled={deleteLoading}
+                  className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-md disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
                 >
-                  Sil
+                  {deleteLoading && <Loader2 className="w-4 h-4 animate-spin" />}
+                  <span>{deleteLoading ? 'Siliniyor...' : 'Sil'}</span>
                 </button>
               </div>
             </div>
