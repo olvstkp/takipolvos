@@ -19,6 +19,7 @@ interface ProformaListItem {
     payment_method: string;
     delivery: string;
     created_at: string;
+    currency?: string;
 }
 
 interface Customer {
@@ -69,6 +70,7 @@ interface ProformaDetail {
     total_amount: number;
     status: string;
     weight_per_pallet_kg: number;
+    currency?: string;
     customer: Customer;
     proforma_items: ProformaItem[];
     pallets: Array<{
@@ -93,6 +95,9 @@ const Proforma: React.FC = () => {
     const [editingProforma, setEditingProforma] = useState<ProformaDetail | null>(null);
     const [deletingProforma, setDeletingProforma] = useState<ProformaListItem | null>(null);
     const [showSettingsModal, setShowSettingsModal] = useState(false);
+    const [showCompanySelectModal, setShowCompanySelectModal] = useState(false);
+    const [downloadingProformaId, setDownloadingProformaId] = useState<string | null>(null);
+    const [selectedCompanyForDownload, setSelectedCompanyForDownload] = useState('DASPI');
 
     const fetchProformas = async () => {
         try {
@@ -108,6 +113,7 @@ const Proforma: React.FC = () => {
                     payment_method,
                     delivery,
                     created_at,
+                    currency,
                     customers!inner (
                         name,
                         address
@@ -131,7 +137,8 @@ const Proforma: React.FC = () => {
                 item_count: item.proforma_items.length,
                 payment_method: item.payment_method,
                 delivery: item.delivery,
-                created_at: item.created_at
+                created_at: item.created_at,
+                currency: item.currency
             }));
 
             setProformas(formattedData);
@@ -333,13 +340,20 @@ const Proforma: React.FC = () => {
         }
     };
 
-    const handleDownload = async (proformaId: string) => {
+    const handleDownload = (proformaId: string) => {
+        setDownloadingProformaId(proformaId);
+        setShowCompanySelectModal(true);
+    };
+
+    const handleConfirmDownload = async () => {
+        if (!downloadingProformaId) return;
+
         const toastId = toast.loading('Excel dosyası hazırlanıyor...', {
             icon: '📊'
         });
 
         try {
-        const detail = await fetchProformaDetail(proformaId);
+        const detail = await fetchProformaDetail(downloadingProformaId);
             if (!detail) {
                 toast.error('Proforma bilgileri yüklenemedi!', { id: toastId });
                 return;
@@ -386,6 +400,7 @@ const Proforma: React.FC = () => {
                 issueDate: detail.issue_date,
                 validityDate: detail.validity_date,
                 customerId: detail.customer_id,
+                currency: detail.currency,
                 items: detail.proforma_items.map(item => {
                     const product = productsMap.get(item.product_id);
                     return {
@@ -517,7 +532,7 @@ const Proforma: React.FC = () => {
                 proformaGroups: proformaGroupsData || [],
                 packingListCalculations,
                 currency: proformaData.currency || 'EUR', // Proforma'dan currency'i al
-                selectedCompany: savedCompany, // String olarak gönder, ExcelExport DB'den logo çekecek
+                selectedCompany: selectedCompanyForDownload, // Seçilen şirketi kullan
                 paymentInfo: paymentData
             });
 
@@ -534,6 +549,9 @@ const Proforma: React.FC = () => {
                 icon: '❌',
                 duration: 5000
             });
+        } finally {
+            setShowCompanySelectModal(false);
+            setDownloadingProformaId(null);
         }
     };
 
@@ -555,7 +573,9 @@ const Proforma: React.FC = () => {
                     delivery: updatedData.delivery,
                     notes: updatedData.notes,
                     status: updatedData.status,
-                    weight_per_pallet_kg: updatedData.weight_per_pallet_kg
+                    weight_per_pallet_kg: updatedData.weight_per_pallet_kg,
+                    currency: updatedData.currency,
+                    total_amount: updatedData.total_amount
                 })
                 .eq('id', editingProforma.id);
 
@@ -661,11 +681,20 @@ const Proforma: React.FC = () => {
         return new Date(dateString).toLocaleDateString('tr-TR');
     };
 
-    const formatCurrency = (amount: number) => {
+    const formatCurrency = (amount: number, currency: string = 'EUR') => {
         return new Intl.NumberFormat('tr-TR', {
             style: 'currency',
-            currency: 'EUR'
+            currency: currency
         }).format(amount);
+    };
+
+    const getCurrencySymbol = (currency: string) => {
+        switch (currency) {
+            case 'USD': return '$';
+            case 'TL': return '₺';
+            case 'EUR':
+            default: return '€';
+        }
     };
 
     return (
@@ -784,6 +813,19 @@ const Proforma: React.FC = () => {
                     onClose={() => setShowSettingsModal(false)}
                 />
             )}
+
+            {/* Company Select Modal */}
+            {showCompanySelectModal && (
+                <CompanySelectModal
+                    selectedCompany={selectedCompanyForDownload}
+                    onSelectCompany={setSelectedCompanyForDownload}
+                    onConfirm={handleConfirmDownload}
+                    onClose={() => {
+                        setShowCompanySelectModal(false);
+                        setDownloadingProformaId(null);
+                    }}
+                />
+            )}
         </div>
     );
 };
@@ -899,7 +941,7 @@ const ProformaListTab: React.FC<ProformaListTabProps> = ({
                                 <div className="flex items-center space-x-2">
                                     <DollarSign className="w-4 h-4 text-gray-500" />
                                     <span className="text-lg font-bold text-green-600">
-                                        {formatCurrency(proforma.total_amount)}
+                                        {formatCurrency(proforma.total_amount, proforma.currency || 'EUR')}
                                     </span>
                                 </div>
                             </div>
@@ -1156,8 +1198,18 @@ const ProformaEditModal: React.FC<ProformaEditModalProps> = ({ proforma, onClose
         payment_method: proforma.payment_method,
         delivery: proforma.delivery,
         notes: proforma.notes || '',
-        status: proforma.status
+        status: proforma.status,
+        currency: proforma.currency || 'EUR'
     });
+
+    const getCurrencySymbol = (currency: string) => {
+        switch (currency) {
+            case 'USD': return '$';
+            case 'TL': return '₺';
+            case 'EUR':
+            default: return '€';
+        }
+    };
     const [items, setItems] = useState<ProformaItem[]>(proforma.proforma_items);
     const [pallets, setPallets] = useState(proforma.pallets);
     const [weightPerPallet, setWeightPerPallet] = useState(proforma.weight_per_pallet_kg);
@@ -1182,6 +1234,32 @@ const ProformaEditModal: React.FC<ProformaEditModalProps> = ({ proforma, onClose
 
         fetchProducts();
     }, []);
+
+    // Para birimi değiştiğinde ürün fiyatlarını güncelle
+    useEffect(() => {
+        const newItems = items.map(item => {
+            const product = products.find(p => p.id === item.product_id);
+            if (product) {
+                let unitPrice = 0;
+                if (formData.currency === 'EUR') {
+                    unitPrice = item.unit === 'case' ? product.price_per_case : product.price_per_piece;
+                } else if (formData.currency === 'USD') {
+                    unitPrice = item.unit === 'case' ? product.price_per_case_usd : product.price_per_piece_usd;
+                } else if (formData.currency === 'TL') {
+                    unitPrice = item.unit === 'case' ? product.price_per_case_tl : product.price_per_piece_tl;
+                }
+                
+                return {
+                    ...item,
+                    unit_price: unitPrice || 0,
+                    total: item.quantity * (unitPrice || 0)
+                };
+            }
+            return item;
+        });
+        
+        setItems(newItems);
+    }, [formData.currency, products]);
 
     const handleSave = () => {
         const totalAmount = items.reduce((sum, item) => sum + item.total, 0);
@@ -1240,10 +1318,18 @@ const ProformaEditModal: React.FC<ProformaEditModalProps> = ({ proforma, onClose
             const product = products.find(p => p.id === value);
             if (product) {
                 newItems[index].description = product.name;
-                newItems[index].unit_price = newItems[index].unit === 'case' 
-                    ? product.price_per_case 
-                    : product.price_per_piece;
-                // Recalculate total when product changes
+                
+                // Para birimi bazlı fiyat belirleme
+                let unitPrice = 0;
+                if (formData.currency === 'EUR') {
+                    unitPrice = newItems[index].unit === 'case' ? product.price_per_case : product.price_per_piece;
+                } else if (formData.currency === 'USD') {
+                    unitPrice = newItems[index].unit === 'case' ? product.price_per_case_usd : product.price_per_piece_usd;
+                } else if (formData.currency === 'TL') {
+                    unitPrice = newItems[index].unit === 'case' ? product.price_per_case_tl : product.price_per_piece_tl;
+                }
+                
+                newItems[index].unit_price = unitPrice || 0;
                 newItems[index].total = newItems[index].quantity * newItems[index].unit_price;
             }
         }
@@ -1251,10 +1337,17 @@ const ProformaEditModal: React.FC<ProformaEditModalProps> = ({ proforma, onClose
         if (field === 'unit') {
             const product = products.find(p => p.id === newItems[index].product_id);
             if (product) {
-                newItems[index].unit_price = value === 'case' 
-                    ? product.price_per_case 
-                    : product.price_per_piece;
-                // Recalculate total when unit changes
+                // Para birimi bazlı fiyat belirleme
+                let unitPrice = 0;
+                if (formData.currency === 'EUR') {
+                    unitPrice = value === 'case' ? product.price_per_case : product.price_per_piece;
+                } else if (formData.currency === 'USD') {
+                    unitPrice = value === 'case' ? product.price_per_case_usd : product.price_per_piece_usd;
+                } else if (formData.currency === 'TL') {
+                    unitPrice = value === 'case' ? product.price_per_case_tl : product.price_per_piece_tl;
+                }
+                
+                newItems[index].unit_price = unitPrice || 0;
                 newItems[index].total = newItems[index].quantity * newItems[index].unit_price;
             }
         }
@@ -1370,6 +1463,21 @@ const ProformaEditModal: React.FC<ProformaEditModalProps> = ({ proforma, onClose
                                 <option value="cancelled">İptal</option>
                             </select>
                         </div>
+
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                Para Birimi
+                            </label>
+                            <select
+                                value={formData.currency}
+                                onChange={(e) => setFormData({ ...formData, currency: e.target.value })}
+                                className="w-full p-3 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md"
+                            >
+                                <option value="EUR">EUR (€)</option>
+                                <option value="USD">USD ($)</option>
+                                <option value="TL">TL (₺)</option>
+                            </select>
+                        </div>
                     </div>
                 </div>
 
@@ -1479,7 +1587,7 @@ const ProformaEditModal: React.FC<ProformaEditModalProps> = ({ proforma, onClose
                                             Toplam:
                                         </span>
                                         <span className="text-lg font-semibold text-gray-900 dark:text-white">
-                                            €{item.total.toFixed(2)}
+                                            {getCurrencySymbol(formData.currency)}{item.total.toFixed(2)}
                                         </span>
                                     </div>
                                 </div>
@@ -1489,7 +1597,7 @@ const ProformaEditModal: React.FC<ProformaEditModalProps> = ({ proforma, onClose
 
                     <div className="mt-4 text-right">
                         <span className="text-lg font-bold text-gray-900 dark:text-white">
-                            Toplam: €{items.reduce((sum, item) => sum + item.total, 0).toFixed(2)}
+                            Toplam: {getCurrencySymbol(formData.currency)}{items.reduce((sum, item) => sum + item.total, 0).toFixed(2)}
                         </span>
                     </div>
                 </div>
@@ -2505,6 +2613,158 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
             </div>
         </div>
         </ErrorBoundary>
+    );
+};
+
+// Company Select Modal Component
+interface CompanySelectModalProps {
+    selectedCompany: string;
+    onSelectCompany: (company: string) => void;
+    onConfirm: () => void;
+    onClose: () => void;
+}
+
+const CompanySelectModal: React.FC<CompanySelectModalProps> = ({
+    selectedCompany,
+    onSelectCompany,
+    onConfirm,
+    onClose
+}) => {
+    const [companies, setCompanies] = useState<Array<{value: string, label: string, description: string}>>([]);
+    const [loadingCompanies, setLoadingCompanies] = useState(true);
+
+    useEffect(() => {
+        const fetchCompanies = async () => {
+            try {
+                setLoadingCompanies(true);
+                const { data, error } = await supabase
+                    .from('companies')
+                    .select('*')
+                    .order('name');
+
+                if (error) {
+                    console.error('Companies fetch error:', error);
+                    // Fallback to default companies if DB fetch fails
+                    setCompanies([
+                        { 
+                            value: 'DASPI', 
+                            label: 'DASPI',
+                            description: 'Daspi Soap & Cosmetics'
+                        },
+                        { 
+                            value: 'OLIVE', 
+                            label: 'OLIVE',
+                            description: 'Olive Oil & Trade'
+                        }
+                    ]);
+                } else {
+                    const formattedCompanies = data?.map(company => ({
+                        value: company.short_name || company.name,
+                        label: company.short_name || company.name,
+                        description: company.name
+                    })) || [];
+                    setCompanies(formattedCompanies);
+                }
+            } catch (error) {
+                console.error('Error fetching companies:', error);
+                // Fallback to default companies
+                setCompanies([
+                    { 
+                        value: 'DASPI', 
+                        label: 'DASPI',
+                        description: 'Daspi Soap & Cosmetics'
+                    },
+                    { 
+                        value: 'OLIVE', 
+                        label: 'OLIVE',
+                        description: 'Olive Oil & Trade'
+                    }
+                ]);
+            } finally {
+                setLoadingCompanies(false);
+            }
+        };
+
+        fetchCompanies();
+    }, []);
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full">
+                <div className="p-6 border-b border-gray-200 dark:border-gray-700">
+                    <div className="flex justify-between items-center">
+                        <h2 className="text-xl font-bold text-gray-900 dark:text-white">
+                            Şirket Seçin
+                        </h2>
+                        <button
+                            onClick={onClose}
+                            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                        >
+                            <X className="w-5 h-5" />
+                        </button>
+                    </div>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-2">
+                        Excel dosyasında hangi şirket bilgilerinin gösterileceğini seçin:
+                    </p>
+                </div>
+                
+                <div className="p-6">
+                    {loadingCompanies ? (
+                        <div className="flex items-center justify-center py-8">
+                            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                            <span className="ml-3 text-gray-600 dark:text-gray-400">Şirketler yükleniyor...</span>
+                        </div>
+                    ) : (
+                        <div className="space-y-3">
+                            {companies.map((company) => (
+                                <label
+                                    key={company.value}
+                                    className={`flex items-center p-3 border rounded-lg cursor-pointer transition-colors ${
+                                        selectedCompany === company.value
+                                            ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                                            : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
+                                    }`}
+                                >
+                                    <input
+                                        type="radio"
+                                        name="company"
+                                        value={company.value}
+                                        checked={selectedCompany === company.value}
+                                        onChange={(e) => onSelectCompany(e.target.value)}
+                                        className="mr-3 text-blue-600"
+                                    />
+                                    <div>
+                                        <div className="font-medium text-gray-900 dark:text-white">
+                                            {company.label}
+                                        </div>
+                                        <div className="text-sm text-gray-600 dark:text-gray-400">
+                                            {company.description}
+                                        </div>
+                                    </div>
+                                </label>
+                            ))}
+                        </div>
+                    )}
+                </div>
+                
+                <div className="p-6 border-t border-gray-200 dark:border-gray-700 flex justify-end space-x-3">
+                    <button
+                        onClick={onClose}
+                        className="px-4 py-2 text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-600 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-md"
+                    >
+                        İptal
+                    </button>
+                    <button
+                        onClick={onConfirm}
+                        disabled={loadingCompanies}
+                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md flex items-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        <Download className="w-4 h-4" />
+                        <span>İndir</span>
+                    </button>
+                </div>
+            </div>
+        </div>
     );
 };
 

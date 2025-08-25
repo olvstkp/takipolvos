@@ -3,7 +3,7 @@ import { Proforma, ProformaItem, Customer, Product, ProformaGroup } from '../typ
 
 export interface ProductExportData {
     products: any[];
-    currency: 'EUR' | 'USD';
+    currency: 'EUR' | 'USD' | 'TL';
 }
 
 export interface ExcelExportData {
@@ -12,7 +12,7 @@ export interface ExcelExportData {
     products: Product[];
     proformaGroups: ProformaGroup[];
     packingListCalculations: any[];
-    currency: 'EUR' | 'USD';
+    currency: 'EUR' | 'USD' | 'TL';
     selectedCompany?: string | { name: string; address?: string; logo_url?: string };
     paymentInfo?: {
         eur?: {
@@ -24,6 +24,14 @@ export interface ExcelExportData {
             accountNumber: string;
         };
         usd?: {
+            bankName: string;
+            branch: string;
+            branchCode: string;
+            swiftCode: string;
+            accountName: string;
+            accountNumber: string;
+        };
+        tl?: {
             bankName: string;
             branch: string;
             branchCode: string;
@@ -93,21 +101,33 @@ export const generateProductsExcel = async (data: ProductExportData) => {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Ürünler');
     
-    // Sütun başlıkları
+    // Para birimi simgesi belirleme
+    const getCurrencySymbol = (curr: string) => {
+        switch (curr) {
+            case 'USD': return '$';
+            case 'TL': return '₺';
+            case 'EUR':
+            default: return '€';
+        }
+    };
+
+    // Sütun başlıkları - dinamik para birimi
     sheet.columns = [
         { key: 'A', width: 40, header: 'ÜRÜN ADI' },
         { key: 'B', width: 25, header: 'SERİ' },
         { key: 'C', width: 30, header: 'PROFORMA GRUBU' },
-        { key: 'D', width: 15, header: 'KOLİ FIYATI (€)' },
-        { key: 'E', width: 15, header: 'ADET FIYATI (€)' },
-        { key: 'F', width: 15, header: 'KOLİ FIYATI ($)' },
-        { key: 'G', width: 15, header: 'ADET FIYATI ($)' },
-        { key: 'H', width: 20, header: 'BARKOD' },
-        { key: 'I', width: 15, header: 'DURUM' },
-        { key: 'J', width: 20, header: 'OLUŞTURULMA TARİHİ' },
-        { key: 'K', width: 20, header: 'ÜRÜN TİPİ' },
-        { key: 'L', width: 15, header: 'BOYUT DEĞERİ' },
-        { key: 'M', width: 15, header: 'BOYUT BİRİMİ' }
+        { key: 'D', width: 15, header: `KOLİ FIYATI (${getCurrencySymbol('EUR')})` },
+        { key: 'E', width: 15, header: `ADET FIYATI (${getCurrencySymbol('EUR')})` },
+        { key: 'F', width: 15, header: `KOLİ FIYATI (${getCurrencySymbol('USD')})` },
+        { key: 'G', width: 15, header: `ADET FIYATI (${getCurrencySymbol('USD')})` },
+        { key: 'H', width: 15, header: `KOLİ FIYATI (${getCurrencySymbol('TL')})` },
+        { key: 'I', width: 15, header: `ADET FIYATI (${getCurrencySymbol('TL')})` },
+        { key: 'J', width: 20, header: 'BARKOD' },
+        { key: 'K', width: 15, header: 'DURUM' },
+        { key: 'L', width: 20, header: 'OLUŞTURULMA TARİHİ' },
+        { key: 'M', width: 20, header: 'ÜRÜN TİPİ' },
+        { key: 'N', width: 15, header: 'BOYUT DEĞERİ' },
+        { key: 'O', width: 15, header: 'BOYUT BİRİMİ' }
     ];
     
     // Başlık satırını formatla
@@ -130,6 +150,8 @@ export const generateProductsExcel = async (data: ProductExportData) => {
             product.price_per_piece || product.pricePerPiece || 0,
             product.price_per_case_usd || product.pricePerCaseUsd || 0,
             product.price_per_piece_usd || product.pricePerPieceUsd || 0,
+            product.price_per_case_tl || product.pricePerCaseTl || 0,
+            product.price_per_piece_tl || product.pricePerPieceTl || 0,
             product.barcode || product.sku || '',
             product.is_active ? 'Aktif' : 'Pasif',
             new Date(product.created_at || Date.now()).toLocaleDateString('tr-TR'),
@@ -138,8 +160,8 @@ export const generateProductsExcel = async (data: ProductExportData) => {
             product.size_unit || ''
         ];
         
-        // Durum sütununu renklendir
-        const statusCell = row.getCell(9);
+        // Durum sütununu renklendir (K sütunu, index 11)
+        const statusCell = row.getCell(11);
         if (product.is_active) {
             statusCell.fill = {
                 type: 'pattern',
@@ -711,7 +733,9 @@ TEL: 0266 3921356`; // Default DASPI adresi
     currentRow++;
     
     // Banka bilgileri değerleri - para birimine göre dinamik
-    const currentCurrencyPayment = currency === 'USD' ? paymentInfo?.usd : paymentInfo?.eur;
+    const currentCurrencyPayment = currency === 'USD' ? paymentInfo?.usd : 
+                                  currency === 'TL' ? paymentInfo?.tl : 
+                                  paymentInfo?.eur;
     
     const bankingValues = [
         currentCurrencyPayment?.bankName || 'İŞ BANKASI',
@@ -719,7 +743,9 @@ TEL: 0266 3921356`; // Default DASPI adresi
         currentCurrencyPayment?.branchCode || 'ISBTRXXX',
         currentCurrencyPayment?.swiftCode || 'ISBKTRISXXX',
         currentCurrencyPayment?.accountName || 'OLIVE VE TİCARET',
-        currentCurrencyPayment?.accountNumber || (currency === 'USD' ? 'USD: TR 95 0006 4000 0022 1230 7227 03' : 'TR 95 0006 4000 0022 1230 7227 02'),
+        currentCurrencyPayment?.accountNumber || (currency === 'USD' ? 'USD: TR 95 0006 4000 0022 1230 7227 03' : 
+                                                  currency === 'TL' ? 'TL: TR 95 0006 4000 0022 1230 7227 04' : 
+                                                  'TR 95 0006 4000 0022 1230 7227 02'),
         '' // Boş 7. sütun
     ];
     
