@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react'
 import { Upload, FileSpreadsheet, Download, X, Check, AlertTriangle } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import { supabase } from '../lib/supabase'
-import stockService from '../services/stockServiceTemp'
+import { stockService } from '../services/stockService'
 import type { ExcelStockRow, ImportResult } from '../types/stock'
 
 interface ExcelImportModalProps {

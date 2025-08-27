@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { StockCodeCategory, CreateStockItemRequest } from '../types/stock'
-import stockService from '../services/stockServiceTemp'
+import { stockService } from '../services/stockService'
 
 interface AddStockItemModalProps {
   isOpen: boolean

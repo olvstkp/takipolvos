@@ -601,7 +601,7 @@ TEL: 0266 3921356`; // Default DASPI adresi
                 cell.alignment = { horizontal: 'left', vertical: 'middle' };
             } else { // UNIT PRICE ve TOTAL AMOUNT
                 cell.alignment = { horizontal: 'right', vertical: 'middle' };
-                cell.numFmt = '#,##0.00'; // Para formatı
+                cell.numFmt = '#.##0,00'; // Türkiye formatı - virgül ile küsürat
             }
             
             // Font styling
@@ -649,7 +649,7 @@ TEL: 0266 3921356`; // Default DASPI adresi
             cell.alignment = { horizontal: 'center', vertical: 'middle' };
         } else if (colIndex === 4) { // TOTAL amount
             cell.alignment = { horizontal: 'right', vertical: 'middle' };
-            cell.numFmt = '#,##0.00';
+            cell.numFmt = '#.##0,00'; // Türkiye formatı - virgül ile küsürat
         } else {
             // Boş hücreler için de gri renk
             cell.alignment = { horizontal: 'center', vertical: 'middle' };
@@ -932,52 +932,68 @@ TEL: 0266 3921356`;
     };
     outPackHeader.alignment = { horizontal: 'center', vertical: 'middle' };
 
-    // Sitedeki PACKING LIST tablosunun aynı hesaplamalarını kullan
+    // ÇALIŞMA sayfası hesaplama mantığı (düzeltilmiş)
     const groupedBySeries = proformaData.items.reduce((acc: Record<string, any>, item) => {
+        if (item.unit !== 'case') return acc; // Sadece koli birimleri
         const product = products.find(p => p.id === item.productId);
         if (!product) return acc;
 
         const isPromo = product.series === 'PROMO';
-        const groupKey = isPromo ? product.id : product.series || 'unknown'; // Use product ID to keep promo items separate
+        const groupKey = isPromo ? product.id : product.series || 'unknown';
         const description = isPromo ? `${product.name} - FREE` : product.series || 'Unknown Series';
 
         if (!acc[groupKey]) {
             acc[groupKey] = { 
                 products: [], 
                 totalQuantity: 0, 
-                net_weight_kg_per_unit: 0, 
-                packaging_weight_kg_per_case: 0, 
+                net_weight_kg_per_case: 0, 
+                brut_weight_kg_per_case: 0, 
                 description: description 
             };
         }
 
         acc[groupKey].products.push(product);
         acc[groupKey].totalQuantity += item.quantity;
-        acc[groupKey].net_weight_kg_per_unit = product.net_weight_kg_per_piece * (item.unit === 'case' ? product.piecesPerCase : 1);
-        acc[groupKey].packaging_weight_kg_per_case = product.packaging_weight_kg_per_case;
+        // Net koli ağırlığı = net_weight_kg_per_piece * piecesPerCase
+        acc[groupKey].net_weight_kg_per_case = product.net_weight_kg_per_piece * product.piecesPerCase;
+        // packaging_weight_kg_per_case aslında brüt ağırlık (yanlış isimlendirilmiş)
+        acc[groupKey].brut_weight_kg_per_case = product.packaging_weight_kg_per_case || 0;
         return acc;
     }, {});
 
-    const totalUnits = Object.values(groupedBySeries).reduce((sum: number, group: any) => sum + group.totalQuantity, 0);
+    // Toplam koli sayısı (sadece case birimli ürünler)
+    const totalCaseCount = Object.values(groupedBySeries).reduce((sum: number, group: any) => sum + group.totalQuantity, 0);
     const totalPalletWeight = (proformaData.shipment?.pallets?.length || 1) * (proformaData.shipment?.weight_per_pallet_kg || 20);
-    const palletWeightPerUnit = totalUnits > 0 ? totalPalletWeight / totalUnits : 0;
+    const palletWeightPerCase = totalCaseCount > 0 ? totalPalletWeight / totalCaseCount : 0;
 
     const packingListData = Object.keys(groupedBySeries).map((seriesKey, index) => {
         const group = groupedBySeries[seriesKey];
-        const { totalQuantity, net_weight_kg_per_unit, packaging_weight_kg_per_case } = group;
-        const tarePerUnit = packaging_weight_kg_per_case + palletWeightPerUnit;
-        const brutWeightPerUnit = net_weight_kg_per_unit + tarePerUnit;
-        const totalNetWeight = totalQuantity * net_weight_kg_per_unit;
-        const totalTare = totalQuantity * tarePerUnit;
-        const totalBrutWeight = totalQuantity * brutWeightPerUnit;
+        const { totalQuantity, net_weight_kg_per_case, brut_weight_kg_per_case } = group;
+        
+        // 1. packaging_weight_kg_per_case aslında brüt ağırlık (doğrudan kullan)
+        const originalBrutPerCase = brut_weight_kg_per_case;
+        
+        // 2. Brüt - net = tare (gerçek ambalaj ağırlığı)
+        const baseTarePerCase = originalBrutPerCase - net_weight_kg_per_case;
+        
+        // 3. Tare + palet ağırlığı/koli = nihai tare
+        const finalTarePerCase = baseTarePerCase + palletWeightPerCase;
+        
+        // 4. Net + nihai tare = palet dahil brüt ağırlık
+        const finalBrutWeightPerCase = net_weight_kg_per_case + finalTarePerCase;
+        
+        // Toplamlar
+        const totalNetWeight = totalQuantity * net_weight_kg_per_case;
+        const totalTare = totalQuantity * finalTarePerCase;
+        const totalBrutWeight = totalQuantity * finalBrutWeightPerCase;
         const totalPieces = totalQuantity * (group.products[0]?.piecesPerCase ?? 1);
         
         return { 
             no: index + 1, 
             description: group.description, 
-            tare_kg_per_unit: tarePerUnit, 
-            net_weight_kg_per_unit, 
-            brut_weight_kg_per_unit: brutWeightPerUnit, 
+            tare_kg_per_unit: finalTarePerCase, 
+            net_weight_kg_per_unit: net_weight_kg_per_case, 
+            brut_weight_kg_per_unit: finalBrutWeightPerCase, 
             cup_units: totalQuantity, 
             total_kg: totalNetWeight, 
             total_tare: totalTare, 
@@ -1005,13 +1021,13 @@ TEL: 0266 3921356`;
             '', // height - boş
             '', // high - boş
             '', // M3 - boş
-            row.tare_kg_per_unit.toFixed(3), // TARE KG/UNIT
-            row.net_weight_kg_per_unit.toFixed(3), // WEIGHT KG/UNIT
-            row.brut_weight_kg_per_unit.toFixed(3), // BRÜT WEIGHT KG/UNIT
+            row.tare_kg_per_unit, // TARE KG/UNIT
+            row.net_weight_kg_per_unit, // WEIGHT KG/UNIT
+            row.brut_weight_kg_per_unit, // BRÜT WEIGHT KG/UNIT
             row.cup_units, // CUP/UNITS - sitedeki ile aynı
-            row.total_kg.toFixed(2), // TOTAL KG
-            row.total_tare.toFixed(2), // TOTAL TARE
-            row.brut_kg.toFixed(2), // BRÜT KG
+            row.total_kg, // TOTAL KG
+            row.total_tare, // TOTAL TARE
+            row.brut_kg, // BRÜT KG
             row.adet_pcs // ADET/PCS
         ];
 
@@ -1025,6 +1041,13 @@ TEL: 0266 3921356`;
             };
             cell.alignment = { horizontal: 'center', vertical: 'middle' };
             cell.font = { name: 'Arial', size: 9 };
+            
+            // Sayı formatlaması - TR formatı (virgül küsürat, nokta binlik)
+            if (colIndex === 6 || colIndex === 7 || colIndex === 8) { // TARE, WEIGHT, BRÜT WEIGHT (3 hane)
+                cell.numFmt = '#,##0.000';
+            } else if (colIndex === 10 || colIndex === 11 || colIndex === 12) { // TOTAL KG, TOTAL TARE, BRÜT KG (2 hane)
+                cell.numFmt = '#,##0.00';
+            }
         });
 
         // Genel toplamları güncelle
@@ -1041,9 +1064,9 @@ TEL: 0266 3921356`;
     const totalRowData = [
         '', '', '', '', '', '', '', '', '', 
         totalCases, 
-        totalWeight.toFixed(2), 
-        totalTare.toFixed(2), 
-        totalBrut.toFixed(2), 
+        totalWeight, 
+        totalTare, 
+        totalBrut, 
         totalPieces
     ];
 
@@ -1057,6 +1080,11 @@ TEL: 0266 3921356`;
             bottom: { style: 'thick' }, right: { style: 'thin' }
         };
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        
+        // Toplam satırında sayı formatlaması - TR formatı
+        if (colIndex === 10 || colIndex === 11 || colIndex === 12) { // TOTAL KG, TOTAL TARE, BRÜT KG
+            cell.numFmt = '#,##0.00';
+        }
     });
 };
 
@@ -1204,8 +1232,8 @@ TEL: 0266 3921356`;
         const details = [
             ['Total Number of Cases', group.totalCases],
             [`Total number of ${group.groupName.toLowerCase()}`, group.totalPieces],
-            ['Net Weight', `${group.totalNetWeight.toFixed(2)} kg`],
-            ['Gross Weight', `${group.totalGrossWeight.toFixed(2)} kg`]
+            ['Net Weight', group.totalNetWeight],
+            ['Gross Weight', group.totalGrossWeight]
         ];
 
         details.forEach(([label, value]) => {
@@ -1218,6 +1246,12 @@ TEL: 0266 3921356`;
             const valueCell = packingSheet.getCell(`C${currentRow}`);
             valueCell.value = value;
             valueCell.font = { size: 10, color: { argb: 'FF000000' } };
+            if (typeof value === 'number') {
+                valueCell.numFmt = '#,##0.00';
+                const unitCell = packingSheet.getCell(`D${currentRow}`);
+                unitCell.value = 'kg';
+                unitCell.font = { size: 10, color: { argb: 'FF000000' } };
+            }
             
             currentRow++;
         });
@@ -1236,8 +1270,8 @@ TEL: 0266 3921356`;
     const summaryData = [
         ['TOTAL NUMBER OF CASES', totals.totalCases],
         ['TOTAL NUMBER OF SOAPS AND PRODUCTS', totals.totalPieces],
-        ['NET KG', totals.totalNetKg.toFixed(2)],
-        ['GROSS KG', totals.totalGrossKg.toFixed(2)],
+        ['NET KG', totals.totalNetKg],
+        ['GROSS KG', totals.totalGrossKg],
         ['NUMBER OF PALLETS', proformaData.shipment?.pallets?.length || 1]
     ];
 
@@ -1249,6 +1283,9 @@ TEL: 0266 3921356`;
         const valueCell = packingSheet.getCell(`C${currentRow}`);
         valueCell.value = value;
         valueCell.font = { bold: true, size: 11, color: { argb: 'FF000000' } };
+        if (typeof value === 'number' && (label === 'NET KG' || label === 'GROSS KG')) {
+            valueCell.numFmt = '#.##0,00';
+        }
         
         currentRow++;
     });

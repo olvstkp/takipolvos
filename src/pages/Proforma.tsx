@@ -460,6 +460,8 @@ const Proforma: React.FC = () => {
                 pricePerPiece: Number(product.price_per_piece) || 0,
                 pricePerCaseUsd: Number(product.price_per_case_usd) || 0,
                 pricePerPieceUsd: Number(product.price_per_piece_usd) || 0,
+                pricePerCaseTl: Number(product.price_per_case_tl) || 0,
+                pricePerPieceTl: Number(product.price_per_piece_tl) || 0,
                 net_weight_kg_per_piece: Number(product.series?.net_weight_kg_per_piece) || 0.1,
                 piecesPerCase: Number(product.series?.pieces_per_case) || 12,
                 packaging_weight_kg_per_case: Number(product.series?.packaging_weight_kg_per_case) || 0.5,
@@ -503,6 +505,14 @@ const Proforma: React.FC = () => {
                             swiftCode: paymentResult.swift_code_usd || '',
                             accountName: paymentResult.account_name_usd || '',
                             accountNumber: paymentResult.account_number_usd || ''
+                        },
+                        tl: {
+                            bankName: paymentResult.bank_name_tl || '',
+                            branch: paymentResult.branch_tl || '',
+                            branchCode: paymentResult.branch_code_tl || '',
+                            swiftCode: paymentResult.swift_code_tl || '',
+                            accountName: paymentResult.account_name_tl || '',
+                            accountNumber: paymentResult.account_number_tl || ''
                         }
                     };
                 }
@@ -682,10 +692,24 @@ const Proforma: React.FC = () => {
     };
 
     const formatCurrency = (amount: number, currency: string = 'EUR') => {
-        return new Intl.NumberFormat('tr-TR', {
-            style: 'currency',
-            currency: currency
-        }).format(amount);
+        try {
+            // TL currency'si için özel handling
+            if (currency === 'TL') {
+                return new Intl.NumberFormat('tr-TR', {
+                    style: 'currency',
+                    currency: 'TRY'
+                }).format(amount);
+            }
+            
+            return new Intl.NumberFormat('tr-TR', {
+                style: 'currency',
+                currency: currency
+            }).format(amount);
+        } catch (error) {
+            // Fallback: currency sembolü ile manuel formatting
+            const symbol = getCurrencySymbol(currency);
+            return `${symbol}${amount.toFixed(2)}`;
+        }
     };
 
     const getCurrencySymbol = (currency: string) => {
@@ -1798,14 +1822,14 @@ interface ProformaSettingsModalProps {
 
 const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }) => {
     const [activeTab, setActiveTab] = useState<'logo' | 'payment'>('logo');
-    const [activePaymentTab, setActivePaymentTab] = useState<'eur' | 'usd'>('eur');
+    const [activePaymentTab, setActivePaymentTab] = useState<'eur' | 'usd' | 'tl'>('eur');
     const [logo, setLogo] = useState<File | null>(null);
     const [logoPreview, setLogoPreview] = useState<string | null>(null);
     const [uploading, setUploading] = useState(false);
     const [selectedCompany, setSelectedCompany] = useState<string>('DASPI');
     const [companyAddress, setCompanyAddress] = useState<string>('');
 
-    // Ödeme bilgileri state'leri - EUR ve USD ayrı
+    // Ödeme bilgileri state'leri - EUR, USD ve TL ayrı
     const [paymentInfo, setPaymentInfo] = useState(() => ({
         eur: {
             bankName: '',
@@ -1816,6 +1840,14 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
             accountNumber: ''
         },
         usd: {
+            bankName: '',
+            branch: '',
+            branchCode: '',
+            swiftCode: '',
+            accountName: '',
+            accountNumber: ''
+        },
+        tl: {
             bankName: '',
             branch: '',
             branchCode: '',
@@ -1877,6 +1909,14 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
                             swiftCode: paymentData.swift_code_usd || '',
                             accountName: paymentData.account_name_usd || '',
                             accountNumber: paymentData.account_number_usd || ''
+                        },
+                        tl: {
+                            bankName: paymentData.bank_name_tl || '',
+                            branch: paymentData.branch_tl || '',
+                            branchCode: paymentData.branch_code_tl || '',
+                            swiftCode: paymentData.swift_code_tl || '',
+                            accountName: paymentData.account_name_tl || '',
+                            accountNumber: paymentData.account_number_tl || ''
                         }
                     };
                     // Force update ile state'i set et
@@ -1937,6 +1977,14 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
                         swiftCode: paymentData.swift_code_usd || '',
                         accountName: paymentData.account_name_usd || '',
                         accountNumber: paymentData.account_number_usd || ''
+                    },
+                    tl: {
+                        bankName: paymentData.bank_name_tl || '',
+                        branch: paymentData.branch_tl || '',
+                        branchCode: paymentData.branch_code_tl || '',
+                        swiftCode: paymentData.swift_code_tl || '',
+                        accountName: paymentData.account_name_tl || '',
+                        accountNumber: paymentData.account_number_tl || ''
                     }
                 };
                 console.log('Company change - Set edilecek payment info:', newPaymentInfo);
@@ -1953,6 +2001,14 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
                         accountNumber: ''
                     },
                     usd: {
+                        bankName: '',
+                        branch: '',
+                        branchCode: '',
+                        swiftCode: '',
+                        accountName: '',
+                        accountNumber: ''
+                    },
+                    tl: {
                         bankName: '',
                         branch: '',
                         branchCode: '',
@@ -2175,7 +2231,14 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
                     branch_code_usd: paymentInfo.usd?.branchCode || '',
                     swift_code_usd: paymentInfo.usd?.swiftCode || '',
                     account_name_usd: paymentInfo.usd?.accountName || '',
-                    account_number_usd: paymentInfo.usd?.accountNumber || ''
+                    account_number_usd: paymentInfo.usd?.accountNumber || '',
+                    // TL bilgileri
+                    bank_name_tl: paymentInfo.tl?.bankName || '',
+                    branch_tl: paymentInfo.tl?.branch || '',
+                    branch_code_tl: paymentInfo.tl?.branchCode || '',
+                    swift_code_tl: paymentInfo.tl?.swiftCode || '',
+                    account_name_tl: paymentInfo.tl?.accountName || '',
+                    account_number_tl: paymentInfo.tl?.accountNumber || ''
                 };
 
                 let saveResult;
@@ -2455,6 +2518,16 @@ const ProformaSettingsModal: React.FC<ProformaSettingsModalProps> = ({ onClose }
                                 }`}
                             >
                                 💵 USD Hesabı
+                            </button>
+                            <button
+                                onClick={() => setActivePaymentTab('tl')}
+                                className={`flex-1 px-4 py-2 rounded-md font-medium transition-colors ${
+                                    activePaymentTab === 'tl'
+                                        ? 'bg-white dark:bg-gray-800 text-green-600 dark:text-green-400 shadow'
+                                        : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+                                }`}
+                            >
+                                ₺ TL Hesabı
                             </button>
                         </div>
 

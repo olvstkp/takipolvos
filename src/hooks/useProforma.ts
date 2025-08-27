@@ -177,9 +177,10 @@ export const useProducts = () => {
                     series: item.series?.name || 'Unknown',
                     pricePerCase: item.price_per_case,
                     pricePerPiece: item.price_per_piece,
-                    // Simulate USD prices (1 EUR = 1.08 USD)
-                    pricePerCaseUsd: item.price_per_case * 1.08,
-                    pricePerPieceUsd: item.price_per_piece * 1.08,
+                    pricePerCaseUsd: item.price_per_case_usd || item.price_per_case * 1.08,
+                    pricePerPieceUsd: item.price_per_piece_usd || item.price_per_piece * 1.08,
+                    pricePerCaseTl: item.price_per_case_tl || item.price_per_case * 30,
+                    pricePerPieceTl: item.price_per_piece_tl || item.price_per_piece * 30,
                     net_weight_kg_per_piece: item.series?.net_weight_kg_per_piece || 0,
                     piecesPerCase: item.series?.pieces_per_case || 1,
                     packaging_weight_kg_per_case: item.series?.packaging_weight_kg_per_case || 0,
@@ -238,7 +239,8 @@ export const useProformaOperations = () => {
                     departure: proformaData.departure,
                     delivery: proformaData.delivery,
                     brand: proformaData.brand,
-                    weight_per_pallet_kg: proformaData.shipment.weight_per_pallet_kg
+                    weight_per_pallet_kg: proformaData.shipment.weight_per_pallet_kg,
+                    currency: proformaData.currency || 'EUR'
                 })
                 .select()
                 .single();

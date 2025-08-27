@@ -46,8 +46,31 @@ class StockService {
 
     if (error) throw error
 
+    const items: StockItem[] = (data || []).map((r: any) => ({
+      id: r.id,
+      stockCode: r.stock_code,
+      stockName: r.stock_name,
+      category: r.category,
+      unit: r.unit,
+      currentAmount: Number(r.current_amount) || 0,
+      minimumLevel: Number(r.minimum_level) || 0,
+      initialAmount: r.initial_amount != null ? Number(r.initial_amount) : undefined,
+      supplier: r.supplier || undefined,
+      costPerUnit: r.cost_per_unit != null ? Number(r.cost_per_unit) : undefined,
+      description: r.description || undefined,
+      storageLocation: r.storage_location || undefined,
+      systemEntryDate: r.system_entry_date || undefined,
+      stockEntryDate: r.stock_entry_date || undefined,
+      expiryDate: r.expiry_date || undefined,
+      deliveryInfo: r.delivery_info || undefined,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+      createdBy: r.created_by || undefined,
+      updatedBy: r.updated_by || undefined
+    }))
+
     return {
-      items: data || [],
+      items,
       pagination: {
         page,
         limit,
@@ -64,7 +87,31 @@ class StockService {
       .single()
 
     if (error) throw error
-    return data
+    if (!data) return null
+    const r: any = data
+    const mapped: StockItem = {
+      id: r.id,
+      stockCode: r.stock_code,
+      stockName: r.stock_name,
+      category: r.category,
+      unit: r.unit,
+      currentAmount: Number(r.current_amount) || 0,
+      minimumLevel: Number(r.minimum_level) || 0,
+      initialAmount: r.initial_amount != null ? Number(r.initial_amount) : undefined,
+      supplier: r.supplier || undefined,
+      costPerUnit: r.cost_per_unit != null ? Number(r.cost_per_unit) : undefined,
+      description: r.description || undefined,
+      storageLocation: r.storage_location || undefined,
+      systemEntryDate: r.system_entry_date || undefined,
+      stockEntryDate: r.stock_entry_date || undefined,
+      expiryDate: r.expiry_date || undefined,
+      deliveryInfo: r.delivery_info || undefined,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+      createdBy: r.created_by || undefined,
+      updatedBy: r.updated_by || undefined
+    }
+    return mapped
   }
 
   async getStockItemByCode(stockCode: string): Promise<StockItem | null> {
@@ -154,7 +201,15 @@ class StockService {
   async getStockMovements(stockItemId?: string, page = 1, limit = 50): Promise<StockMovement[]> {
     let query = supabase
       .from('stock_movements')
-      .select('*')
+      .select(`
+        *,
+        stock_items (
+          id,
+          stock_code,
+          stock_name,
+          unit
+        )
+      `)
       .order('movement_date', { ascending: false })
       .order('created_at', { ascending: false })
 
@@ -168,21 +223,59 @@ class StockService {
     const { data, error } = await query
 
     if (error) throw error
-    return data || []
+
+    const mapped: StockMovement[] = (data || []).map((r: any) => ({
+      id: r.id,
+      stockItemId: r.stock_item_id,
+      movementDate: r.movement_date,
+      movementType: r.movement_type,
+      amount: Number(r.amount) || 0,
+      remainingAmount: Number(r.remaining_amount) || 0,
+      supplier: r.supplier || undefined,
+      expiryDate: r.expiry_date || undefined,
+      serialNumber: r.serial_number || undefined,
+      invoiceNumber: r.invoice_number || undefined,
+      waybillNumber: r.waybill_number || undefined,
+      batchNumber: r.batch_number || undefined,
+      unitCost: r.unit_cost != null ? Number(r.unit_cost) : undefined,
+      totalCost: r.total_cost != null ? Number(r.total_cost) : undefined,
+      notes: r.notes || undefined,
+      referenceType: r.reference_type || undefined,
+      referenceId: r.reference_id || undefined,
+      deliveryInfo: r.delivery_info || undefined,
+      systemEntryDate: r.system_entry_date || undefined,
+      createdAt: r.created_at,
+      createdBy: r.created_by || undefined,
+      stockItem: r.stock_items
+        ? {
+            id: r.stock_items.id,
+            stockCode: r.stock_items.stock_code,
+            stockName: r.stock_items.stock_name,
+            category: '',
+            unit: r.stock_items.unit,
+            currentAmount: 0,
+            minimumLevel: 0,
+            createdAt: '',
+            updatedAt: ''
+          } as any
+        : undefined
+    }))
+
+    return mapped
   }
 
   async createStockMovement(movement: CreateStockMovementRequest): Promise<StockMovement> {
-    // Get current stock amount
+    // Get current stock amount and validate for 'out'
     const stockItem = await this.getStockItemById(movement.stockItemId)
     if (!stockItem) throw new Error('Stok kalemi bulunamadı')
 
-    const newAmount = movement.movementType === 'in' 
-      ? stockItem.currentAmount + movement.amount
-      : stockItem.currentAmount - movement.amount
-
-    if (newAmount < 0) {
+    if (movement.movementType === 'out' && stockItem.currentAmount < movement.amount) {
       throw new Error('Yetersiz stok miktarı')
     }
+
+    const newAmount = movement.movementType === 'in'
+      ? stockItem.currentAmount + movement.amount
+      : stockItem.currentAmount - movement.amount
 
     const { data, error } = await supabase
       .from('stock_movements')
@@ -193,16 +286,16 @@ class StockService {
         amount: movement.amount,
         remaining_amount: newAmount,
         supplier: movement.supplier,
-        expiry_date: movement.expiryDate,
+        expiry_date: movement.expiryDate && movement.expiryDate.length === 10 ? movement.expiryDate : null,
         serial_number: movement.serialNumber,
         invoice_number: movement.invoiceNumber,
         waybill_number: movement.waybillNumber,
         batch_number: movement.batchNumber,
-        unit_cost: movement.unitCost,
-        total_cost: movement.unitCost ? movement.unitCost * movement.amount : undefined,
+        unit_cost: movement.unitCost != null && !Number.isNaN(movement.unitCost) ? movement.unitCost : null,
+        total_cost: movement.unitCost ? movement.unitCost * movement.amount : null,
         notes: movement.notes,
         reference_type: movement.referenceType || 'manual',
-        delivery_info: movement.deliveryInfo,
+        delivery_info: null,
         created_by: 'user'
       })
       .select()
@@ -210,6 +303,27 @@ class StockService {
 
     if (error) throw error
     return data
+  }
+
+  async deleteStockMovementsByIds(ids: string[]): Promise<void> {
+    if (!ids.length) return
+    const { error } = await supabase
+      .from('stock_movements')
+      .delete()
+      .in('id', ids)
+
+    if (error) throw error
+  }
+
+  async deleteAllStockMovements(): Promise<number> {
+    // Dikkat: Tüm kayıtları siler
+    const { data, error, count } = await supabase
+      .from('stock_movements')
+      .delete({ count: 'exact' })
+      .gt('id', '00000000-0000-0000-0000-000000000000')
+
+    if (error) throw error
+    return count || (data ? (data as any[]).length : 0)
   }
 
   // Categories
@@ -232,7 +346,54 @@ class StockService {
       .order('category_name')
 
     if (error) throw error
-    return data || []
+    const mapped: StockCodeCategory[] = (data || []).map((r: any) => ({
+      id: r.id,
+      categoryName: r.category_name,
+      categoryCode: r.category_code,
+      description: r.description || undefined,
+      isActive: r.is_active,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at
+    }))
+    return mapped
+  }
+
+  async addStockCodeCategory(categoryName: string): Promise<StockCodeCategory> {
+    // Kodu otomatik üret: isimden ilk 2 harf (Türkçe harfler dahil), eksikse X ile doldur
+    const cleaned = (categoryName || '').toUpperCase().trim().replace(/\s+/g, '')
+    const letters = cleaned.split('').filter(ch => /[A-ZÇĞİÖŞÜ]/.test(ch)).slice(0, 2)
+    while (letters.length < 2) letters.push('X')
+    const categoryCode = letters.join('')
+
+    const { data, error } = await supabase
+      .from('stock_code_categories')
+      .insert({
+        category_name: categoryName,
+        category_code: categoryCode,
+        is_active: true
+      })
+      .select()
+      .single()
+
+    if (error) throw error
+    return {
+      id: data.id,
+      categoryName: data.category_name,
+      categoryCode: data.category_code,
+      description: data.description || undefined,
+      isActive: data.is_active,
+      createdAt: data.created_at,
+      updatedAt: data.updated_at
+    }
+  }
+
+  async deleteStockCodeCategory(id: string): Promise<void> {
+    const { error } = await supabase
+      .from('stock_code_categories')
+      .delete()
+      .eq('id', id)
+
+    if (error) throw error
   }
 
   // Suppliers

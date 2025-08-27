@@ -31,6 +31,8 @@ export interface Product {
   pricePerPiece: number;
   pricePerCaseUsd?: number;
   pricePerPieceUsd?: number;
+  pricePerCaseTl?: number;
+  pricePerPieceTl?: number;
   net_weight_kg_per_piece: number;
   piecesPerCase: number;
   packaging_weight_kg_per_case: number;
@@ -86,4 +88,5 @@ export interface Proforma {
   delivery: string;
   brand: string;
   shipment: ShipmentInfo;
+  currency?: string;
 } 

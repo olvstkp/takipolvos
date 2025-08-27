@@ -14,7 +14,7 @@ interface ProformaGeneratorProps {
 
 const ProformaGenerator: React.FC<ProformaGeneratorProps> = ({ onSuccess }) => {
     const [currentStep, setCurrentStep] = useState(0);
-    const [currency, setCurrency] = useState<'EUR' | 'USD'>('EUR');
+    const [currency, setCurrency] = useState<'EUR' | 'USD' | 'TL'>('EUR');
     const [selectedCompany, setSelectedCompany] = useState<string>('DASPI');
     const steps = ['invoice', 'packing-calculation', 'packing-summary'];
     const stepTitles = {
@@ -52,7 +52,8 @@ const ProformaGenerator: React.FC<ProformaGeneratorProps> = ({ onSuccess }) => {
         shipment: {
             weight_per_pallet_kg: 20,
             pallets: [{ pallet_number: 1, width_cm: 80, length_cm: 120, height_cm: 124 }, { pallet_number: 2, width_cm: 80, length_cm: 120, height_cm: 126 }]
-        }
+        },
+        currency: 'EUR'
     });
 
     // Fetch next proforma number from Supabase
@@ -204,14 +205,17 @@ const ProformaGenerator: React.FC<ProformaGeneratorProps> = ({ onSuccess }) => {
     // Update all item prices when currency changes
     useEffect(() => {
         updateProforma(draft => {
+            draft.currency = currency; // Currency'yi proformada güncelle
             draft.items.forEach(item => {
                 const product = products.find(p => p.id === item.productId);
                 if (product) {
                     // Select price based on currency and unit
                     if (currency === 'EUR') {
                         item.unitPrice = item.unit === 'case' ? product.pricePerCase : product.pricePerPiece;
-                    } else {
+                    } else if (currency === 'USD') {
                         item.unitPrice = item.unit === 'case' ? (product.pricePerCaseUsd || product.pricePerCase * 1.08) : (product.pricePerPieceUsd || product.pricePerPiece * 1.08);
+                    } else if (currency === 'TL') {
+                        item.unitPrice = item.unit === 'case' ? (product.pricePerCaseTl || product.pricePerCase * 30) : (product.pricePerPieceTl || product.pricePerPiece * 30);
                     }
                     item.total = item.quantity * item.unitPrice;
                 }
@@ -260,8 +264,10 @@ const ProformaGenerator: React.FC<ProformaGeneratorProps> = ({ onSuccess }) => {
                     // Select price based on currency and unit
                     if (currency === 'EUR') {
                         currentItem.unitPrice = currentItem.unit === 'case' ? product.pricePerCase : product.pricePerPiece;
-                    } else {
+                    } else if (currency === 'USD') {
                         currentItem.unitPrice = currentItem.unit === 'case' ? (product.pricePerCaseUsd || product.pricePerCase * 1.08) : (product.pricePerPieceUsd || product.pricePerPiece * 1.08);
+                    } else if (currency === 'TL') {
+                        currentItem.unitPrice = currentItem.unit === 'case' ? (product.pricePerCaseTl || product.pricePerCase * 30) : (product.pricePerPieceTl || product.pricePerPiece * 30);
                     }
                 }
             }
@@ -273,9 +279,11 @@ const ProformaGenerator: React.FC<ProformaGeneratorProps> = ({ onSuccess }) => {
                     // Select price based on currency and unit
                     if (currency === 'EUR') {
                         currentItem.unitPrice = currentItem.unit === 'case' ? product.pricePerCase : product.pricePerPiece;
-                    } else {
+                    } else if (currency === 'USD') {
                         currentItem.unitPrice = currentItem.unit === 'case' ? (product.pricePerCaseUsd || product.pricePerCase * 1.08) : (product.pricePerPieceUsd || product.pricePerPiece * 1.08);
-                }
+                    } else if (currency === 'TL') {
+                        currentItem.unitPrice = currentItem.unit === 'case' ? (product.pricePerCaseTl || product.pricePerCase * 30) : (product.pricePerPieceTl || product.pricePerPiece * 30);
+                    }
             }
             }
             
@@ -315,42 +323,58 @@ const ProformaGenerator: React.FC<ProformaGeneratorProps> = ({ onSuccess }) => {
         });
     };
     
-    // Packing list calculations
+    // Packing list calculations - Düzeltilmiş hesaplama mantığı
      const packingListCalculations = useMemo(() => {
         const groupedBySeries = proformaData.items.reduce((acc, item) => {
+            if (item.unit !== 'case') return acc; // Sadece koli birimleri
             const product = products.find(p => p.id === item.productId);
             if (!product) return acc;
 
             const isPromo = product.series === 'PROMO';
-            const groupKey = isPromo ? product.id : product.series; // Use product ID to keep promo items separate
+            const groupKey = isPromo ? product.id : product.series;
             const description = isPromo ? `${product.name} - FREE` : product.series;
 
             if (!acc[groupKey]) {
-                 acc[groupKey] = { products: [], totalQuantity: 0, net_weight_kg_per_unit: 0, packaging_weight_kg_per_case: 0, description: description };
+                 acc[groupKey] = { products: [], totalQuantity: 0, net_weight_kg_per_case: 0, brut_weight_kg_per_case: 0, description: description };
             }
 
             acc[groupKey].products.push(product);
             acc[groupKey].totalQuantity += item.quantity;
-            acc[groupKey].net_weight_kg_per_unit = product.net_weight_kg_per_piece * (item.unit === 'case' ? product.piecesPerCase : 1);
-            acc[groupKey].packaging_weight_kg_per_case = product.packaging_weight_kg_per_case;
+            // Net koli ağırlığı = net_weight_kg_per_piece * piecesPerCase
+            acc[groupKey].net_weight_kg_per_case = product.net_weight_kg_per_piece * product.piecesPerCase;
+            // packaging_weight_kg_per_case aslında brüt ağırlık
+            acc[groupKey].brut_weight_kg_per_case = product.packaging_weight_kg_per_case || 0;
             return acc;
-        }, {} as Record<string, { description: string; products: Product[]; totalQuantity: number; net_weight_kg_per_unit: number; packaging_weight_kg_per_case: number; }>);
+        }, {} as Record<string, { description: string; products: Product[]; totalQuantity: number; net_weight_kg_per_case: number; brut_weight_kg_per_case: number; }>);
 
-        const totalUnits = Object.values(groupedBySeries).reduce((sum, group) => sum + group.totalQuantity, 0);
+        // Toplam koli sayısı (sadece case birimli ürünler)
+        const totalCaseCount = Object.values(groupedBySeries).reduce((sum, group) => sum + group.totalQuantity, 0);
         const totalPalletWeight = proformaData.shipment.pallets.length * proformaData.shipment.weight_per_pallet_kg;
-        const palletWeightPerUnit = totalUnits > 0 ? totalPalletWeight / totalUnits : 0;
+        const palletWeightPerCase = totalCaseCount > 0 ? totalPalletWeight / totalCaseCount : 0;
 
         return Object.keys(groupedBySeries).map((seriesKey, index) => {
             const group = groupedBySeries[seriesKey];
-            const { totalQuantity, net_weight_kg_per_unit, packaging_weight_kg_per_case } = group;
-            const tarePerUnit = packaging_weight_kg_per_case + palletWeightPerUnit;
-            const brutWeightPerUnit = net_weight_kg_per_unit + tarePerUnit;
-            const totalNetWeight = totalQuantity * net_weight_kg_per_unit;
-            const totalTare = totalQuantity * tarePerUnit;
-            const totalBrutWeight = totalQuantity * brutWeightPerUnit;
+            const { totalQuantity, net_weight_kg_per_case, brut_weight_kg_per_case } = group;
+            
+            // 1. packaging_weight_kg_per_case aslında brüt ağırlık
+            const originalBrutPerCase = brut_weight_kg_per_case;
+            
+            // 2. Brüt - net = tare (gerçek ambalaj ağırlığı)
+            const baseTarePerCase = originalBrutPerCase - net_weight_kg_per_case;
+            
+            // 3. Tare + palet ağırlığı/koli = nihai tare
+            const finalTarePerCase = baseTarePerCase + palletWeightPerCase;
+            
+            // 4. Net + nihai tare = palet dahil brüt ağırlık
+            const finalBrutWeightPerCase = net_weight_kg_per_case + finalTarePerCase;
+            
+            // Toplamlar
+            const totalNetWeight = totalQuantity * net_weight_kg_per_case;
+            const totalTare = totalQuantity * finalTarePerCase;
+            const totalBrutWeight = totalQuantity * finalBrutWeightPerCase;
             const totalPieces = totalQuantity * (group.products[0]?.piecesPerCase ?? 1);
             
-            return { no: index + 1, description: group.description, tare_kg_per_unit: tarePerUnit, net_weight_kg_per_unit, brut_weight_kg_per_unit: brutWeightPerUnit, cup_units: totalQuantity, total_kg: totalNetWeight, total_tare: totalTare, brut_kg: totalBrutWeight, adet_pcs: totalPieces };
+            return { no: index + 1, description: group.description, tare_kg_per_unit: finalTarePerCase, net_weight_kg_per_unit: net_weight_kg_per_case, brut_weight_kg_per_unit: finalBrutWeightPerCase, cup_units: totalQuantity, total_kg: totalNetWeight, total_tare: totalTare, brut_kg: totalBrutWeight, adet_pcs: totalPieces };
         });
     }, [proformaData.items, proformaData.shipment, products]);
 
@@ -482,13 +506,23 @@ const ProformaGenerator: React.FC<ProformaGeneratorProps> = ({ onSuccess }) => {
             </button>
             <button
                         onClick={() => setCurrency('USD')}
-                        className={`px-4 py-2 rounded-r-md text-sm font-medium transition-colors ${
+                        className={`px-4 py-2 text-sm font-medium transition-colors ${
                             currency === 'USD' 
                             ? 'bg-blue-600 text-white z-10 ring-2 ring-blue-500' 
                             : 'bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 hover:bg-gray-300'
                         }`}
                     >
                         💵 Dolar (USD)
+            </button>
+            <button
+                        onClick={() => setCurrency('TL')}
+                        className={`px-4 py-2 rounded-r-md text-sm font-medium transition-colors ${
+                            currency === 'TL' 
+                            ? 'bg-blue-600 text-white z-10 ring-2 ring-blue-500' 
+                            : 'bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 hover:bg-gray-300'
+                        }`}
+                    >
+                        ₺ Türk Lirası (TL)
             </button>
         </div>
                 <span className="text-sm text-gray-500">
@@ -743,6 +777,7 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({ proformaData, customer, custome
 };
 
 const PackingCalculationTab: React.FC<{ packingData: any[] }> = ({ packingData }) => {
+    const formatNum = (n: number, digits: number) => new Intl.NumberFormat('tr-TR', { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(n || 0);
     return (
     <div className="p-8">
         <div className="text-center mb-8">
@@ -770,13 +805,13 @@ const PackingCalculationTab: React.FC<{ packingData: any[] }> = ({ packingData }
                         <tr key={row.no}>
                             <td className="td-cell text-center">{row.no}</td>
                             <td className="td-cell">{row.description}</td>
-                            <td className="td-cell text-right">{row.tare_kg_per_unit.toFixed(3)}</td>
-                            <td className="td-cell text-right">{row.net_weight_kg_per_unit.toFixed(3)}</td>
-                            <td className="td-cell text-right">{row.brut_weight_kg_per_unit.toFixed(3)}</td>
+                            <td className="td-cell text-right">{formatNum(row.tare_kg_per_unit, 3)}</td>
+                            <td className="td-cell text-right">{formatNum(row.net_weight_kg_per_unit, 3)}</td>
+                            <td className="td-cell text-right">{formatNum(row.brut_weight_kg_per_unit, 3)}</td>
                             <td className="td-cell text-center">{row.cup_units}</td>
-                            <td className="td-cell text-right">{row.total_kg.toFixed(2)}</td>
-                            <td className="td-cell text-right">{row.total_tare.toFixed(2)}</td>
-                            <td className="td-cell text-right">{row.brut_kg.toFixed(2)}</td>
+                            <td className="td-cell text-right">{formatNum(row.total_kg, 2)}</td>
+                            <td className="td-cell text-right">{formatNum(row.total_tare, 2)}</td>
+                            <td className="td-cell text-right">{formatNum(row.brut_kg, 2)}</td>
                             <td className="td-cell text-center">{row.adet_pcs}</td>
                 </tr>
                     ))}
@@ -785,9 +820,9 @@ const PackingCalculationTab: React.FC<{ packingData: any[] }> = ({ packingData }
                     <tr className="bg-gray-100 dark:bg-gray-900/50 font-bold">
                         <td colSpan={5} className="td-cell text-right">TOTAL</td>
                         <td className="td-cell text-center">{packingData.reduce((s, r) => s + r.cup_units, 0)}</td>
-                        <td className="td-cell text-right">{packingData.reduce((s, r) => s + r.total_kg, 0).toFixed(2)}</td>
-                        <td className="td-cell text-right">{packingData.reduce((s, r) => s + r.total_tare, 0).toFixed(2)}</td>
-                        <td className="td-cell text-right">{packingData.reduce((s, r) => s + r.brut_kg, 0).toFixed(2)}</td>
+                        <td className="td-cell text-right">{formatNum(packingData.reduce((s, r) => s + r.total_kg, 0), 2)}</td>
+                        <td className="td-cell text-right">{formatNum(packingData.reduce((s, r) => s + r.total_tare, 0), 2)}</td>
+                        <td className="td-cell text-right">{formatNum(packingData.reduce((s, r) => s + r.brut_kg, 0), 2)}</td>
                         <td className="td-cell text-center">{packingData.reduce((s, r) => s + r.adet_pcs, 0)}</td>
                 </tr>
                 </tfoot>
@@ -798,6 +833,7 @@ const PackingCalculationTab: React.FC<{ packingData: any[] }> = ({ packingData }
 };
 
 const PackingSummaryTab: React.FC<{ proformaData: Proforma, packingData: any[], products: Product[], productTypes: any[], proformaGroups: any[] }> = ({ proformaData, products, productTypes, proformaGroups }) => {
+    const formatNum = (n: number, digits: number) => new Intl.NumberFormat('tr-TR', { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(n || 0);
 
     // Format product name for packing list
     const formatProductName = (product: Product) => {
@@ -905,8 +941,8 @@ const PackingSummaryTab: React.FC<{ proformaData: Proforma, packingData: any[], 
                                  <h4 className="font-bold text-blue-600 dark:text-blue-400">{group.groupName}</h4>
                                  <div className="flex justify-between text-sm mt-2"><span>Total Number of Cases:</span> <span className="font-medium">{group.totalCases}</span></div>
                                  <div className="flex justify-between text-sm"><span>Total number of {group.groupName.toLowerCase()}:</span> <span className="font-medium">{group.totalPieces}</span></div>
-                                 <div className="flex justify-between text-sm"><span>Net Weight:</span> <span className="font-medium">{group.totalNetWeight.toFixed(2)} kg</span></div>
-                                 <div className="flex justify-between text-sm"><span>Gross Weight:</span> <span className="font-medium text-green-600">{group.totalGrossWeight.toFixed(2)} kg</span></div>
+                                 <div className="flex justify-between text-sm"><span>Net Weight:</span> <span className="font-medium">{new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(group.totalNetWeight || 0)} kg</span></div>
+                                 <div className="flex justify-between text-sm"><span>Gross Weight:</span> <span className="font-medium text-green-600">{new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(group.totalGrossWeight || 0)} kg</span></div>
                     </div>
                         )
                     })}
@@ -916,8 +952,8 @@ const PackingSummaryTab: React.FC<{ proformaData: Proforma, packingData: any[], 
                   <div className="space-y-2">
                         <SummaryRow label="TOTAL NUMBER OF CASES" value={groupedTotals.totalCases} />
                         <SummaryRow label="TOTAL NUMBER OF SOAPS AND PRODUCTS" value={groupedTotals.totalPieces} />
-                        <SummaryRow label="NET KG" value={groupedTotals.totalNetKg.toFixed(2)} />
-                        <SummaryRow label="GROSS KG" value={groupedTotals.totalGrossKg.toFixed(2)} />
+                        <SummaryRow label="NET KG" value={new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(groupedTotals.totalNetKg || 0)} />
+                        <SummaryRow label="GROSS KG" value={new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(groupedTotals.totalGrossKg || 0)} />
                         <SummaryRow label="NUMBER OF PALLETS" value={proformaData.shipment.pallets.length} />
                         {proformaData.shipment.pallets.map(p => (
                             <SummaryRow key={p.pallet_number} label={`PALLET - ${p.pallet_number}`} value={`${p.width_cm}x${p.length_cm}x${p.height_cm}`} />

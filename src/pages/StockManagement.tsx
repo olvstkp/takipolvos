@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
+import { StockCodeCategory } from '../types/stock';
 import { Search, Plus, Edit, Trash2, Package, AlertTriangle, TrendingUp, TrendingDown, Upload, CheckSquare, Square, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Filter, SortAsc, SortDesc } from 'lucide-react';
 import StockItemCard from '../components/StockItemCard';
 import AddStockItemModal from '../components/AddStockItemModal';
 import EditStockItemModal from '../components/EditStockItemModal';
 import ExcelImportModal from '../components/ExcelImportModal';
 import DeleteConfirmationModal from '../components/DeleteConfirmationModal';
-import stockService from '../services/stockServiceTemp';
+import { stockService } from '../services/stockService';
 import type { StockItem, StockAlert, StockFilter } from '../types/stock';
 
 const StockManagement: React.FC = () => {
@@ -39,6 +40,11 @@ const StockManagement: React.FC = () => {
   const [categories, setCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>('');
+  const [showCategoryModal, setShowCategoryModal] = useState(false);
+  const [categoriesData, setCategoriesData] = useState<StockCodeCategory[]>([]);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [newCategoryCode, setNewCategoryCode] = useState('');
+  const [catLoading, setCatLoading] = useState(false);
 
   // Load data on component mount
   useEffect(() => {
@@ -48,6 +54,8 @@ const StockManagement: React.FC = () => {
   const loadData = async () => {
     try {
       setLoading(true);
+      const cats = await stockService.getStockCodeCategories();
+      setCategoriesData(cats);
       const [itemsResponse, alertsData, categoriesData] = await Promise.all([
         stockService.getStockItems(),
         stockService.getStockAlerts(),
@@ -328,6 +336,12 @@ const StockManagement: React.FC = () => {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Stok Yönetimi</h1>
         <div className="flex items-center space-x-3">
+          <button
+            onClick={() => setShowCategoryModal(true)}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
+          >
+            Kategori Yönetimi
+          </button>
           <div className="flex bg-gray-100 rounded-lg p-1">
             <button
               onClick={() => setViewMode('cards')}
@@ -905,17 +919,131 @@ const StockManagement: React.FC = () => {
       <DeleteConfirmationModal
         isOpen={showDeleteModal}
         onClose={() => setShowDeleteModal(false)}
-        onConfirm={handleConfirmDelete}
-        title={deleteModalData.type === 'single' ? 'Stok Kalemini Sil' : 'Toplu Silme'}
+        onConfirm={async () => {
+          // Eğer kategori silme modalsa deleteModalData.item.id üzerinden kategori sil
+          const cat = (deleteModalData.item as any)
+          if (cat && cat.id && !cat.stockCode) {
+            try {
+              await stockService.deleteStockCodeCategory(cat.id)
+              setCategoriesData(prev => prev.filter(c => c.id !== cat.id))
+              setCategories(prev => prev.filter(n => n !== cat.stockName))
+              setShowDeleteModal(false)
+              return
+            } catch (e) {
+              alert('Kategori silme hatası')
+              return
+            }
+          }
+          await handleConfirmDelete()
+        }}
+        title={deleteModalData.item && !(deleteModalData.item as any).stockCode ? 'Kategori Sil' : (deleteModalData.type === 'single' ? 'Stok Kalemini Sil' : 'Toplu Silme')}
         message={
-          deleteModalData.type === 'single' && deleteModalData.item
-            ? `"${deleteModalData.item.stockName}" (${deleteModalData.item.stockCode}) stok kalemini silmek istediğinizden emin misiniz?`
-            : `Seçili olan ${deleteModalData.count} stok kalemini silmek istediğinizden emin misiniz? Bu işlem tüm sayfalardan seçili öğeleri silecektir.`
+          deleteModalData.item && !(deleteModalData.item as any).stockCode
+            ? `"${(deleteModalData.item as any).stockName}" kategorisini silmek istediğinize emin misiniz?`
+            : (deleteModalData.type === 'single' && deleteModalData.item
+              ? `"${deleteModalData.item.stockName}" (${deleteModalData.item.stockCode}) stok kalemini silmek istediğinizden emin misiniz?`
+              : `Seçili olan ${deleteModalData.count} stok kalemini silmek istediğinizden emin misiniz? Bu işlem tüm sayfalardan seçili öğeleri silecektir.`)
         }
         itemCount={deleteModalData.count}
         loading={bulkDeleteLoading}
         progress={deleteProgress}
       />
+
+      {/* Category Management Modal */}
+      {showCategoryModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-xl">
+            <div className="p-6 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Kategori Yönetimi</h3>
+              <button onClick={() => setShowCategoryModal(false)} className="text-gray-500 hover:text-gray-700">×</button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Kategori Adı</label>
+                  <input
+                    type="text"
+                    value={newCategoryName}
+                    onChange={(e) => setNewCategoryName(e.target.value)}
+                    className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
+                    placeholder="Örn: Hammadde"
+                  />
+                </div>
+                {/* Kod alanı otomatik üretildiği için kaldırıldı */}
+              </div>
+              <div>
+                <button
+                  onClick={async () => {
+                    if (!newCategoryName.trim()) return
+                    try {
+                      setCatLoading(true)
+                      const created = await stockService.addStockCodeCategory(newCategoryName.trim())
+                      setCategoriesData(prev => [created, ...prev])
+                      setCategories(prev => Array.from(new Set([created.categoryName, ...prev])))
+                      setNewCategoryName('')
+                    } catch (e) {
+                      alert('Kategori eklenemedi')
+                    } finally {
+                      setCatLoading(false)
+                    }
+                  }}
+                  disabled={catLoading}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {catLoading ? 'Ekleniyor...' : 'Ekle'}
+                </button>
+              </div>
+
+              <div className="border rounded-md overflow-hidden dark:border-gray-700">
+                <table className="w-full">
+                  <thead className="bg-gray-50 dark:bg-gray-700">
+                    <tr>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">Ad</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">Kod</th>
+                      <th className="px-4 py-2"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y dark:divide-gray-700">
+                    {categoriesData.map(cat => (
+                      <tr key={cat.id}>
+                        <td className="px-4 py-2 text-sm text-gray-900 dark:text-white">{cat.categoryName}</td>
+                        <td className="px-4 py-2 text-sm font-mono text-gray-700 dark:text-gray-200">{cat.categoryCode}</td>
+                        <td className="px-4 py-2 text-right">
+                          <button
+                            onClick={() => setDeleteModalData({ type: 'single', item: undefined, count: 1 })}
+                            className="hidden"
+                          />
+                          <button
+                            onClick={() => setDeleteModalData({ type: 'bulk', count: 1 })}
+                            className="hidden"
+                          />
+                          <button
+                            onClick={() => {
+                              setDeleteModalData({ type: 'single', item: { id: cat.id, stockName: cat.categoryName } as any, count: 1 })
+                              setShowDeleteModal(true)
+                            }}
+                            className="px-3 py-1 text-sm bg-red-600 text-white rounded-md hover:bg-red-700"
+                          >
+                            Sil
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {categoriesData.length === 0 && (
+                      <tr>
+                        <td colSpan={3} className="px-4 py-6 text-center text-sm text-gray-500 dark:text-gray-400">Kategori yok</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div className="p-4 border-t border-gray-200 dark:border-gray-700 flex justify-end">
+              <button onClick={() => setShowCategoryModal(false)} className="px-4 py-2 border rounded-md">Kapat</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

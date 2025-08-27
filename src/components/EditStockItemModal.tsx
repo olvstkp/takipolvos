@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Save, AlertCircle } from 'lucide-react';
 import { StockItem } from '../types/stock';
-import stockService from '../services/stockServiceTemp';
+import { stockService } from '../services/stockService';
 
 interface EditStockItemModalProps {
   isOpen: boolean;
