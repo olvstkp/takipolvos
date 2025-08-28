@@ -832,7 +832,7 @@ const PackingCalculationTab: React.FC<{ packingData: any[] }> = ({ packingData }
     );
 };
 
-const PackingSummaryTab: React.FC<{ proformaData: Proforma, packingData: any[], products: Product[], productTypes: any[], proformaGroups: any[] }> = ({ proformaData, products, productTypes, proformaGroups }) => {
+const PackingSummaryTab: React.FC<{ proformaData: Proforma, packingData: any[], products: Product[], productTypes: any[], proformaGroups: any[] }> = ({ proformaData, packingData, products, productTypes, proformaGroups }) => {
     const formatNum = (n: number, digits: number) => new Intl.NumberFormat('tr-TR', { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(n || 0);
 
     // Format product name for packing list
@@ -929,6 +929,14 @@ const PackingSummaryTab: React.FC<{ proformaData: Proforma, packingData: any[], 
         };
     }, [groupedByProformaGroup]);
 
+    // PackingCalculationTab toplamlarına göre NET ve GROSS
+    const packingSheetTotals = useMemo(() => {
+        const netKg = (packingData || []).reduce((s: number, r: any) => s + (r.total_kg || 0), 0);
+        const tareKg = (packingData || []).reduce((s: number, r: any) => s + (r.total_tare || 0), 0);
+        const grossKg = netKg + tareKg;
+        return { netKg, grossKg };
+    }, [packingData]);
+
     return (
         <div className="p-8">
             <div className="text-center mb-8"><h2 className="text-2xl font-bold text-gray-900 dark:text-white">PACKING LIST - ÖZET</h2></div>
@@ -952,8 +960,8 @@ const PackingSummaryTab: React.FC<{ proformaData: Proforma, packingData: any[], 
                   <div className="space-y-2">
                         <SummaryRow label="TOTAL NUMBER OF CASES" value={groupedTotals.totalCases} />
                         <SummaryRow label="TOTAL NUMBER OF SOAPS AND PRODUCTS" value={groupedTotals.totalPieces} />
-                        <SummaryRow label="NET KG" value={new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(groupedTotals.totalNetKg || 0)} />
-                        <SummaryRow label="GROSS KG" value={new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(groupedTotals.totalGrossKg || 0)} />
+                        <SummaryRow label="NET KG" value={new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(packingSheetTotals.netKg || 0)} />
+                        <SummaryRow label="GROSS KG" value={new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(packingSheetTotals.grossKg || 0)} />
                         <SummaryRow label="NUMBER OF PALLETS" value={proformaData.shipment.pallets.length} />
                         {proformaData.shipment.pallets.map(p => (
                             <SummaryRow key={p.pallet_number} label={`PALLET - ${p.pallet_number}`} value={`${p.width_cm}x${p.length_cm}x${p.height_cm}`} />
