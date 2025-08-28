@@ -1247,9 +1247,10 @@ TEL: 0266 3921356`;
             valueCell.value = value;
             valueCell.font = { size: 10, color: { argb: 'FF000000' } };
             if (typeof value === 'number') {
-                valueCell.numFmt = '#,##0.00';
+                const isWeightRow = label === 'Net Weight' || label === 'Gross Weight';
+                valueCell.numFmt = isWeightRow ? '#,##0.00' : '#,##0';
                 const unitCell = packingSheet.getCell(`D${currentRow}`);
-                unitCell.value = 'kg';
+                unitCell.value = isWeightRow ? 'kg' : '';
                 unitCell.font = { size: 10, color: { argb: 'FF000000' } };
             }
             
