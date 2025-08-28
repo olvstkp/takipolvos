@@ -832,7 +832,7 @@ const PackingCalculationTab: React.FC<{ packingData: any[] }> = ({ packingData }
     );
 };
 
-const PackingSummaryTab: React.FC<{ proformaData: Proforma, packingData: any[], products: Product[], productTypes: any[], proformaGroups: any[] }> = ({ proformaData, packingData, products, productTypes, proformaGroups }) => {
+const PackingSummaryTab: React.FC<{ proformaData: Proforma, packingData: any[], products: Product[], productTypes: any[], proformaGroups: any[] }> = ({ proformaData, products, productTypes, proformaGroups }) => {
     const formatNum = (n: number, digits: number) => new Intl.NumberFormat('tr-TR', { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(n || 0);
 
     // Format product name for packing list
@@ -868,29 +868,35 @@ const PackingSummaryTab: React.FC<{ proformaData: Proforma, packingData: any[], 
             }>;
         }> = {};
 
+        // Sadece koli (case) birimleri için toplam koli sayısı
+        const totalCaseCount = proformaData.items.reduce((sum, item) => {
+            if (item.unit !== 'case') return sum;
+            return sum + item.quantity;
+        }, 0);
+
+        // Palet ağırlığını koli başına dağıt
+        const totalPalletWeight = proformaData.shipment.pallets.length * proformaData.shipment.weight_per_pallet_kg;
+        const palletWeightPerCase = totalCaseCount > 0 ? totalPalletWeight / totalCaseCount : 0;
+
         proformaData.items.forEach(item => {
+            // Packing hesaplarıyla tutarlılık için yalnızca 'case' birimlerini hesaba kat
+            if (item.unit !== 'case') return;
+
             const product = products.find(p => p.id === item.productId);
             if (!product) return;
 
-            // Aynı proforma grubundaki ürünleri birleştirmek için sadece group_id kullan
             const groupKey = product.proforma_group_id || `ungrouped_${product.id}`;
             const groupName = formatProductName(product);
-            
 
-            
-            const netWeight = item.quantity * product.net_weight_kg_per_piece * (item.unit === 'case' ? product.piecesPerCase : 1);
-            
-            // Calculate gross weight using the same logic as packing calculations
-            const totalUnits = proformaData.items.reduce((sum, i) => {
-                const p = products.find(pr => pr.id === i.productId);
-                return p ? sum + i.quantity : sum;
-            }, 0);
-            
-            const totalPalletWeight = proformaData.shipment.pallets.length * proformaData.shipment.weight_per_pallet_kg;
-            const palletWeightPerUnit = totalUnits > 0 ? totalPalletWeight / totalUnits : 0;
-            const packaging_weight = product.packaging_weight_kg_per_case || 0;
-            const tarePerUnit = packaging_weight + palletWeightPerUnit;
-            const grossWeight = netWeight + (item.quantity * tarePerUnit);
+            // Seri bazlı doğru net ve brüt formülü (PackingCalculation ile aynı)
+            const netPerCase = product.net_weight_kg_per_piece * product.piecesPerCase;
+            const originalBrutPerCase = product.packaging_weight_kg_per_case || 0; // aslında brüt ağırlık
+            const baseTarePerCase = originalBrutPerCase - netPerCase; // gerçek ambalaj ağırlığı
+            const finalTarePerCase = baseTarePerCase + palletWeightPerCase; // palet payı ekle
+            const finalBrutPerCase = netPerCase + finalTarePerCase;
+
+            const netWeight = item.quantity * netPerCase;
+            const grossWeight = item.quantity * finalBrutPerCase;
 
             if (!groups[groupKey]) {
                 groups[groupKey] = {
@@ -903,8 +909,8 @@ const PackingSummaryTab: React.FC<{ proformaData: Proforma, packingData: any[], 
                 };
             }
 
-            groups[groupKey].totalCases += item.unit === 'case' ? item.quantity : 0;
-            groups[groupKey].totalPieces += item.quantity * (item.unit === 'case' ? product.piecesPerCase : 1);
+            groups[groupKey].totalCases += item.quantity;
+            groups[groupKey].totalPieces += item.quantity * product.piecesPerCase;
             groups[groupKey].totalNetWeight += netWeight;
             groups[groupKey].totalGrossWeight += grossWeight;
             groups[groupKey].items.push({
@@ -916,7 +922,7 @@ const PackingSummaryTab: React.FC<{ proformaData: Proforma, packingData: any[], 
         });
 
         return groups;
-    }, [proformaData.items, products, proformaGroups, proformaData.shipment]);
+    }, [proformaData.items, products, proformaData.shipment]);
 
     // Calculate totals from grouped data
     const groupedTotals = useMemo(() => {
@@ -928,14 +934,6 @@ const PackingSummaryTab: React.FC<{ proformaData: Proforma, packingData: any[], 
             totalGrossKg: groups.reduce((sum, group) => sum + group.totalGrossWeight, 0)
         };
     }, [groupedByProformaGroup]);
-
-    // PackingCalculationTab toplamlarına göre NET ve GROSS
-    const packingSheetTotals = useMemo(() => {
-        const netKg = (packingData || []).reduce((s: number, r: any) => s + (r.total_kg || 0), 0);
-        const tareKg = (packingData || []).reduce((s: number, r: any) => s + (r.total_tare || 0), 0);
-        const grossKg = netKg + tareKg;
-        return { netKg, grossKg };
-    }, [packingData]);
 
     return (
         <div className="p-8">
@@ -960,8 +958,8 @@ const PackingSummaryTab: React.FC<{ proformaData: Proforma, packingData: any[], 
                   <div className="space-y-2">
                         <SummaryRow label="TOTAL NUMBER OF CASES" value={groupedTotals.totalCases} />
                         <SummaryRow label="TOTAL NUMBER OF SOAPS AND PRODUCTS" value={groupedTotals.totalPieces} />
-                        <SummaryRow label="NET KG" value={new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(packingSheetTotals.netKg || 0)} />
-                        <SummaryRow label="GROSS KG" value={new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(packingSheetTotals.grossKg || 0)} />
+                        <SummaryRow label="NET KG" value={new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(groupedTotals.totalNetKg || 0)} />
+                        <SummaryRow label="GROSS KG" value={new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(groupedTotals.totalGrossKg || 0)} />
                         <SummaryRow label="NUMBER OF PALLETS" value={proformaData.shipment.pallets.length} />
                         {proformaData.shipment.pallets.map(p => (
                             <SummaryRow key={p.pallet_number} label={`PALLET - ${p.pallet_number}`} value={`${p.width_cm}x${p.length_cm}x${p.height_cm}`} />
