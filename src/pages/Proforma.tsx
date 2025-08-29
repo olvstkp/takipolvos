@@ -521,16 +521,52 @@ const Proforma: React.FC = () => {
                 // Fallback olarak localStorage kullan
             }
 
-            // Packing list hesaplamaları oluştur
-            const packingListCalculations = proformaData.items.map((item, index) => {
-                const product = productsMap.get(item.productId);
+            // Packing list hesaplamaları (web ile aynı mantık)
+            const groupedBySeries = proformaData.items.reduce((acc: any, item) => {
+                if (item.unit !== 'case') return acc; // Sadece koli birimleri
+                const product = transformedProducts.find(p => p.id === item.productId);
+                if (!product) return acc;
+
+                const groupKey = product.series || product.id;
+                const description = product.series || product.name;
+
+                if (!acc[groupKey]) {
+                    acc[groupKey] = { products: [], totalQuantity: 0, net_weight_kg_per_case: 0, brut_weight_kg_per_case: 0, description };
+                }
+
+                acc[groupKey].products.push(product);
+                acc[groupKey].totalQuantity += item.quantity;
+                acc[groupKey].net_weight_kg_per_case = product.net_weight_kg_per_piece * product.piecesPerCase;
+                acc[groupKey].brut_weight_kg_per_case = product.packaging_weight_kg_per_case || 0; // aslında brüt ağırlık
+                return acc;
+            }, {} as Record<string, { description: string; products: any[]; totalQuantity: number; net_weight_kg_per_case: number; brut_weight_kg_per_case: number; }>);
+
+            const totalCaseCount = Object.values(groupedBySeries).reduce((sum: number, group: any) => sum + group.totalQuantity, 0);
+            const totalPalletWeight = (proformaData.shipment.pallets?.length || 0) * (proformaData.shipment.weight_per_pallet_kg || 0);
+            const palletWeightPerCase = totalCaseCount > 0 ? totalPalletWeight / totalCaseCount : 0;
+
+            const packingListCalculations = Object.keys(groupedBySeries).map((seriesKey, index) => {
+                const group: any = groupedBySeries[seriesKey];
+                const { totalQuantity, net_weight_kg_per_case, brut_weight_kg_per_case } = group;
+                const originalBrutPerCase = brut_weight_kg_per_case;
+                const baseTarePerCase = originalBrutPerCase - net_weight_kg_per_case;
+                const finalTarePerCase = baseTarePerCase + palletWeightPerCase;
+                const finalBrutWeightPerCase = net_weight_kg_per_case + finalTarePerCase;
+                const totalNetWeight = totalQuantity * net_weight_kg_per_case;
+                const totalTare = totalQuantity * finalTarePerCase;
+                const totalBrutWeight = totalQuantity * finalBrutWeightPerCase;
+                const totalPieces = totalQuantity * (group.products[0]?.piecesPerCase ?? 1);
                 return {
                     no: index + 1,
-                    description: item.description,
-                    quantity: item.quantity,
-                    unit: item.unit,
-                    product: product,
-                    weight: product ? product.series?.net_weight_kg_per_piece * item.quantity : 0
+                    description: group.description,
+                    tare_kg_per_unit: finalTarePerCase,
+                    net_weight_kg_per_unit: net_weight_kg_per_case,
+                    brut_weight_kg_per_unit: finalBrutWeightPerCase,
+                    cup_units: totalQuantity,
+                    total_kg: totalNetWeight,
+                    total_tare: totalTare,
+                    brut_kg: totalBrutWeight,
+                    adet_pcs: totalPieces
                 };
             });
 
