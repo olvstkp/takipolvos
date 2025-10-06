@@ -23,11 +23,15 @@ const LabelSettings: React.FC = () => {
 
   const load = async () => {
     setLoading(true);
-    const { data, error } = await supabase.from('label_types').select('id, name, fields').order('name', { ascending: true });
-    if (!error && data) {
-      setTypes(data as LabelTypeDef[]);
-    } else {
-      // Tablo yoksa veya hata: defaultları göster (salt okunur gibi)
+    try {
+      const { data, error } = await supabase.from('label_types').select('id, name, fields').order('name', { ascending: true });
+      if (!error && data) {
+        setTypes(data as LabelTypeDef[]);
+      } else {
+        // Tablo yoksa veya hata: defaultları göster (salt okunur gibi)
+        setTypes(DEFAULT_LABEL_TYPES);
+      }
+    } catch (e) {
       setTypes(DEFAULT_LABEL_TYPES);
     }
     setLoading(false);
@@ -56,7 +60,7 @@ const LabelSettings: React.FC = () => {
 
   const confirmDelete = async () => {
     if (!confirmDeleteId) return;
-    await supabase.from('label_types').delete().eq('id', confirmDeleteId);
+    try { await supabase.from('label_types').delete().eq('id', confirmDeleteId); } catch {}
     setConfirmDeleteId(null);
     await load();
   };
@@ -65,11 +69,13 @@ const LabelSettings: React.FC = () => {
     setSaving(true);
     const payload = { name: name.trim(), fields, anchors };
     if (!payload.name) { setSaving(false); return; }
-    if (editing?.id) {
-      await supabase.from('label_types').update(payload).eq('id', editing.id);
-    } else {
-      await supabase.from('label_types').insert(payload);
-    }
+    try {
+      if (editing?.id) {
+        await supabase.from('label_types').update(payload).eq('id', editing.id);
+      } else {
+        await supabase.from('label_types').insert(payload);
+      }
+    } catch {}
     setSaving(false);
     resetForm();
     await load();

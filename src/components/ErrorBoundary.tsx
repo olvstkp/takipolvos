@@ -23,14 +23,8 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
 
     componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
         console.error('Error Boundary yakaladı:', error, errorInfo);
-        
-        // Toast göster
-        toast.error('Beklenmeyen bir hata oluştu. Sayfa yenileniyor...');
-        
-        // 3 saniye sonra sayfayı yenile
-        setTimeout(() => {
-            window.location.reload();
-        }, 3000);
+        // Otomatik yenilemeyi kaldır: offline senaryoda döngüye girmesin
+        toast.error('Beklenmeyen bir hata oluştu. Uygulama çalışmaya devam ediyor.');
     }
 
     resetError = () => {
@@ -57,7 +51,7 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
                                 Bir Hata Oluştu
                             </h3>
                             <p className="mt-2 text-sm text-gray-500">
-                                Beklenmeyen bir hata oluştu. Sayfa otomatik olarak yenilenecek.
+                                Beklenmeyen bir hata oluştu. Yeniden dene veya sayfayı yenileyebilirsin.
                             </p>
                             <div className="mt-4 flex justify-center space-x-3">
                                 <button
