@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
+import { handleSupabaseError } from '../utils/errorHandling';
 import type { Customer, Product, Proforma, ProductType } from '../types/proforma';
 
 // Customers Hook
@@ -22,7 +23,7 @@ export const useCustomers = () => {
 
             if (error) throw error;
 
-            const formattedCustomers: Customer[] = data.map((item: any) => ({
+            const formattedCustomers: Customer[] = (data || []).map((item: any) => ({
                 id: item.id,
                 name: item.name,
                 address: item.address,
@@ -36,7 +37,9 @@ export const useCustomers = () => {
 
             setCustomers(formattedCustomers);
         } catch (err: any) {
-            setError(err.message);
+            const msg = handleSupabaseError(err, 'Müşteri listesi yüklenemedi.');
+            setError(msg);
+            setCustomers([]);
         } finally {
             setLoading(false);
         }
@@ -168,7 +171,7 @@ export const useProducts = () => {
                 }
             };
 
-            const formattedProducts: Product[] = data.map((item: any) => {
+            const formattedProducts: Product[] = (data || []).map((item: any) => {
                 const typeAndSize = getProductTypeAndSize(item.name);
                 return {
                     id: item.id,
@@ -198,7 +201,9 @@ export const useProducts = () => {
 
             setProducts(formattedProducts);
         } catch (err: any) {
-            setError(err.message);
+            const msg = handleSupabaseError(err, 'Ürünler yüklenemedi.');
+            setError(msg);
+            setProducts([]);
         } finally {
             setLoading(false);
         }
@@ -355,7 +360,7 @@ export const useProformaGroups = () => {
 
             if (supabaseError) {
                 console.error('Supabase error:', supabaseError);
-                setError(supabaseError.message);
+                setError(handleSupabaseError(supabaseError, 'Gruplar yüklenemedi.'));
                 setProformaGroups([]);
             } else {
                 console.log('✅ Supabase proforma groups loaded:', data);
@@ -363,7 +368,7 @@ export const useProformaGroups = () => {
             }
         } catch (err: any) {
             console.error('Error fetching proforma groups:', err);
-            setError(err.message);
+            setError(handleSupabaseError(err, 'Gruplar yüklenemedi.'));
             setProformaGroups([]);
         } finally {
             setLoading(false);

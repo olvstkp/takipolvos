@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabase'
+import { handleSupabaseError } from '../utils/errorHandling'
 import type {
   StockItem,
   StockMovement,
@@ -18,35 +19,36 @@ import type {
 class StockService {
   // Stock Items CRUD
   async getStockItems(filter?: StockFilter, page = 1, limit = 50): Promise<StockListResponse> {
-    let query = supabase
-      .from('stock_items')
-      .select('*', { count: 'exact' })
-      .order('created_at', { ascending: false })
+    try {
+      let query = supabase
+        .from('stock_items')
+        .select('*', { count: 'exact' })
+        .order('created_at', { ascending: false })
 
-    if (filter?.category) {
-      query = query.eq('category', filter.category)
-    }
+      if (filter?.category) {
+        query = query.eq('category', filter.category)
+      }
 
-    if (filter?.supplier) {
-      query = query.eq('supplier', filter.supplier)
-    }
+      if (filter?.supplier) {
+        query = query.eq('supplier', filter.supplier)
+      }
 
-    if (filter?.search) {
-      query = query.or(`stock_name.ilike.%${filter.search}%,stock_code.ilike.%${filter.search}%`)
-    }
+      if (filter?.search) {
+        query = query.or(`stock_name.ilike.%${filter.search}%,stock_code.ilike.%${filter.search}%`)
+      }
 
-    if (filter?.lowStock) {
-      query = query.lt('current_amount', 'minimum_level')
-    }
+      if (filter?.lowStock) {
+        query = query.lt('current_amount', 'minimum_level')
+      }
 
-    const offset = (page - 1) * limit
-    query = query.range(offset, offset + limit - 1)
+      const offset = (page - 1) * limit
+      query = query.range(offset, offset + limit - 1)
 
-    const { data, error, count } = await query
+      const { data, error, count } = await query
 
-    if (error) throw error
+      if (error) throw error
 
-    const items: StockItem[] = (data || []).map((r: any) => ({
+      const items: StockItem[] = (data || []).map((r: any) => ({
       id: r.id,
       stockCode: r.stock_code,
       stockName: r.stock_name,
@@ -67,51 +69,66 @@ class StockService {
       updatedAt: r.updated_at,
       createdBy: r.created_by || undefined,
       updatedBy: r.updated_by || undefined
-    }))
+      }))
 
-    return {
-      items,
-      pagination: {
-        page,
-        limit,
-        total: count || 0
+      return {
+        items,
+        pagination: {
+          page,
+          limit,
+          total: count || 0
+        }
+      }
+    } catch (err) {
+      // Supabase kapalı ise boş liste döndür
+      return {
+        items: [],
+        pagination: {
+          page,
+          limit,
+          total: 0
+        }
       }
     }
   }
 
   async getStockItemById(id: string): Promise<StockItem | null> {
-    const { data, error } = await supabase
-      .from('stock_items')
-      .select('*')
-      .eq('id', id)
-      .single()
+    try {
+      const { data, error } = await supabase
+        .from('stock_items')
+        .select('*')
+        .eq('id', id)
+        .single()
 
-    if (error) throw error
-    if (!data) return null
-    const r: any = data
-    const mapped: StockItem = {
-      id: r.id,
-      stockCode: r.stock_code,
-      stockName: r.stock_name,
-      category: r.category,
-      unit: r.unit,
-      currentAmount: Number(r.current_amount) || 0,
-      minimumLevel: Number(r.minimum_level) || 0,
-      initialAmount: r.initial_amount != null ? Number(r.initial_amount) : undefined,
-      supplier: r.supplier || undefined,
-      costPerUnit: r.cost_per_unit != null ? Number(r.cost_per_unit) : undefined,
-      description: r.description || undefined,
-      storageLocation: r.storage_location || undefined,
-      systemEntryDate: r.system_entry_date || undefined,
-      stockEntryDate: r.stock_entry_date || undefined,
-      expiryDate: r.expiry_date || undefined,
-      deliveryInfo: r.delivery_info || undefined,
-      createdAt: r.created_at,
-      updatedAt: r.updated_at,
-      createdBy: r.created_by || undefined,
-      updatedBy: r.updated_by || undefined
+      if (error) throw error
+      if (!data) return null
+      const r: any = data
+      const mapped: StockItem = {
+        id: r.id,
+        stockCode: r.stock_code,
+        stockName: r.stock_name,
+        category: r.category,
+        unit: r.unit,
+        currentAmount: Number(r.current_amount) || 0,
+        minimumLevel: Number(r.minimum_level) || 0,
+        initialAmount: r.initial_amount != null ? Number(r.initial_amount) : undefined,
+        supplier: r.supplier || undefined,
+        costPerUnit: r.cost_per_unit != null ? Number(r.cost_per_unit) : undefined,
+        description: r.description || undefined,
+        storageLocation: r.storage_location || undefined,
+        systemEntryDate: r.system_entry_date || undefined,
+        stockEntryDate: r.stock_entry_date || undefined,
+        expiryDate: r.expiry_date || undefined,
+        deliveryInfo: r.delivery_info || undefined,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+        createdBy: r.created_by || undefined,
+        updatedBy: r.updated_by || undefined
+      }
+      return mapped
+    } catch (err) {
+      return null
     }
-    return mapped
   }
 
   async getStockItemByCode(stockCode: string): Promise<StockItem | null> {
@@ -126,75 +143,90 @@ class StockService {
   }
 
   async createStockItem(item: CreateStockItemRequest): Promise<StockItem> {
-    // Generate stock code
-    const { data: stockCode, error: codeError } = await supabase
-      .rpc('generate_stock_code', {
-        p_category: item.category,
-        p_product_name: item.stockName
-      })
+    try {
+      // Generate stock code
+      const { data: stockCode, error: codeError } = await supabase
+        .rpc('generate_stock_code', {
+          p_category: item.category,
+          p_product_name: item.stockName
+        })
 
-    if (codeError) throw codeError
+      if (codeError) throw codeError
 
-    const { data, error } = await supabase
-      .from('stock_items')
-      .insert({
-        stock_code: stockCode,
-        stock_name: item.stockName,
-        category: item.category,
-        unit: item.unit,
-        current_amount: item.initialAmount,
-        initial_amount: item.initialAmount,
-        minimum_level: item.minimumLevel || 0,
-        supplier: item.supplier,
-        cost_per_unit: item.costPerUnit,
-        description: item.description,
-        storage_location: item.storageLocation,
-        expiry_date: item.expiryDate,
-        delivery_info: item.deliveryInfo,
-        created_by: 'user'
-      })
-      .select()
-      .single()
+      const { data, error } = await supabase
+        .from('stock_items')
+        .insert({
+          stock_code: stockCode,
+          stock_name: item.stockName,
+          category: item.category,
+          unit: item.unit,
+          current_amount: item.initialAmount,
+          initial_amount: item.initialAmount,
+          minimum_level: item.minimumLevel || 0,
+          supplier: item.supplier,
+          cost_per_unit: item.costPerUnit,
+          description: item.description,
+          storage_location: item.storageLocation,
+          expiry_date: item.expiryDate,
+          delivery_info: item.deliveryInfo,
+          created_by: 'user'
+        })
+        .select()
+        .single()
 
-    if (error) throw error
+      if (error) throw error
 
-    // Create initial stock movement
-    if (item.initialAmount > 0) {
-      await this.createStockMovement({
-        stockItemId: data.id,
-        movementType: 'in',
-        amount: item.initialAmount,
-        supplier: item.supplier,
-        referenceType: 'initial_stock',
-        notes: 'İlk stok girişi'
-      })
+      // Create initial stock movement
+      if (item.initialAmount > 0) {
+        await this.createStockMovement({
+          stockItemId: data.id,
+          movementType: 'in',
+          amount: item.initialAmount,
+          supplier: item.supplier,
+          referenceType: 'initial_stock',
+          notes: 'İlk stok girişi'
+        })
+      }
+
+      return data
+    } catch (e: any) {
+      const msg = handleSupabaseError(e, 'Kayıt oluşturulamadı. Lütfen daha sonra tekrar deneyin.')
+      throw new Error(msg)
     }
-
-    return data
   }
 
   async updateStockItem(id: string, updates: Partial<StockItem>): Promise<StockItem> {
-    const { data, error } = await supabase
-      .from('stock_items')
-      .update({
-        ...updates,
-        updated_by: 'user'
-      })
-      .eq('id', id)
-      .select()
-      .single()
+    try {
+      const { data, error } = await supabase
+        .from('stock_items')
+        .update({
+          ...updates,
+          updated_by: 'user'
+        })
+        .eq('id', id)
+        .select()
+        .single()
 
-    if (error) throw error
-    return data
+      if (error) throw error
+      return data
+    } catch (e: any) {
+      const msg = handleSupabaseError(e, 'Kayıt güncellenemedi. Lütfen daha sonra tekrar deneyin.')
+      throw new Error(msg)
+    }
   }
 
   async deleteStockItem(id: string): Promise<void> {
-    const { error } = await supabase
-      .from('stock_items')
-      .delete()
-      .eq('id', id)
+    try {
+      const { error } = await supabase
+        .from('stock_items')
+        .delete()
+        .eq('id', id)
 
-    if (error) throw error
+      if (error) throw error
+    } catch (e: any) {
+      const msg = handleSupabaseError(e, 'Kayıt silinemedi. Lütfen daha sonra tekrar deneyin.')
+      throw new Error(msg)
+    }
   }
 
   // Stock Movements CRUD
@@ -265,65 +297,80 @@ class StockService {
   }
 
   async createStockMovement(movement: CreateStockMovementRequest): Promise<StockMovement> {
-    // Get current stock amount and validate for 'out'
-    const stockItem = await this.getStockItemById(movement.stockItemId)
-    if (!stockItem) throw new Error('Stok kalemi bulunamadı')
+    try {
+      // Get current stock amount and validate for 'out'
+      const stockItem = await this.getStockItemById(movement.stockItemId)
+      if (!stockItem) throw new Error('Stok kalemi bulunamadı')
 
-    if (movement.movementType === 'out' && stockItem.currentAmount < movement.amount) {
-      throw new Error('Yetersiz stok miktarı')
+      if (movement.movementType === 'out' && stockItem.currentAmount < movement.amount) {
+        throw new Error('Yetersiz stok miktarı')
+      }
+
+      const newAmount = movement.movementType === 'in'
+        ? stockItem.currentAmount + movement.amount
+        : stockItem.currentAmount - movement.amount
+
+      const { data, error } = await supabase
+        .from('stock_movements')
+        .insert({
+          stock_item_id: movement.stockItemId,
+          movement_date: new Date().toISOString().split('T')[0],
+          movement_type: movement.movementType,
+          amount: movement.amount,
+          remaining_amount: newAmount,
+          supplier: movement.supplier,
+          expiry_date: movement.expiryDate && movement.expiryDate.length === 10 ? movement.expiryDate : null,
+          serial_number: movement.serialNumber,
+          invoice_number: movement.invoiceNumber,
+          waybill_number: movement.waybillNumber,
+          batch_number: movement.batchNumber,
+          unit_cost: movement.unitCost != null && !Number.isNaN(movement.unitCost) ? movement.unitCost : null,
+          total_cost: movement.unitCost ? movement.unitCost * movement.amount : null,
+          notes: movement.notes,
+          reference_type: movement.referenceType || 'manual',
+          delivery_info: null,
+          created_by: 'user'
+        })
+        .select()
+        .single()
+
+      if (error) throw error
+      return data
+    } catch (e: any) {
+      const msg = handleSupabaseError(e, 'Hareket kaydı oluşturulamadı. Lütfen daha sonra tekrar deneyin.')
+      throw new Error(msg)
     }
-
-    const newAmount = movement.movementType === 'in'
-      ? stockItem.currentAmount + movement.amount
-      : stockItem.currentAmount - movement.amount
-
-    const { data, error } = await supabase
-      .from('stock_movements')
-      .insert({
-        stock_item_id: movement.stockItemId,
-        movement_date: new Date().toISOString().split('T')[0],
-        movement_type: movement.movementType,
-        amount: movement.amount,
-        remaining_amount: newAmount,
-        supplier: movement.supplier,
-        expiry_date: movement.expiryDate && movement.expiryDate.length === 10 ? movement.expiryDate : null,
-        serial_number: movement.serialNumber,
-        invoice_number: movement.invoiceNumber,
-        waybill_number: movement.waybillNumber,
-        batch_number: movement.batchNumber,
-        unit_cost: movement.unitCost != null && !Number.isNaN(movement.unitCost) ? movement.unitCost : null,
-        total_cost: movement.unitCost ? movement.unitCost * movement.amount : null,
-        notes: movement.notes,
-        reference_type: movement.referenceType || 'manual',
-        delivery_info: null,
-        created_by: 'user'
-      })
-      .select()
-      .single()
-
-    if (error) throw error
-    return data
   }
 
   async deleteStockMovementsByIds(ids: string[]): Promise<void> {
     if (!ids.length) return
-    const { error } = await supabase
-      .from('stock_movements')
-      .delete()
-      .in('id', ids)
+    try {
+      const { error } = await supabase
+        .from('stock_movements')
+        .delete()
+        .in('id', ids)
 
-    if (error) throw error
+      if (error) throw error
+    } catch (e: any) {
+      const msg = handleSupabaseError(e, 'Hareketler silinemedi. Lütfen daha sonra tekrar deneyin.')
+      throw new Error(msg)
+    }
   }
 
   async deleteAllStockMovements(): Promise<number> {
-    // Dikkat: Tüm kayıtları siler
-    const { data, error, count } = await supabase
-      .from('stock_movements')
-      .delete({ count: 'exact' })
-      .gt('id', '00000000-0000-0000-0000-000000000000')
+    try {
+      // Dikkat: Tüm kayıtları siler
+      const { data, error, count } = await supabase
+        .from('stock_movements')
+        .delete({ count: 'exact' })
+        .gt('id', '00000000-0000-0000-0000-000000000000')
 
-    if (error) throw error
-    return count || (data ? (data as any[]).length : 0)
+      if (error) throw error
+      return count || (data ? (data as any[]).length : 0)
+    } catch (e: any) {
+      const msg = handleSupabaseError(e, 'Tüm hareketler silinemedi. Lütfen daha sonra tekrar deneyin.')
+      throw new Error(msg)
+    }
   }
 
   // Categories
@@ -339,23 +386,27 @@ class StockService {
   }
 
   async getStockCodeCategories(): Promise<StockCodeCategory[]> {
-    const { data, error } = await supabase
-      .from('stock_code_categories')
-      .select('*')
-      .eq('is_active', true)
-      .order('category_name')
+    try {
+      const { data, error } = await supabase
+        .from('stock_code_categories')
+        .select('*')
+        .eq('is_active', true)
+        .order('category_name')
 
-    if (error) throw error
-    const mapped: StockCodeCategory[] = (data || []).map((r: any) => ({
-      id: r.id,
-      categoryName: r.category_name,
-      categoryCode: r.category_code,
-      description: r.description || undefined,
-      isActive: r.is_active,
-      createdAt: r.created_at,
-      updatedAt: r.updated_at
-    }))
-    return mapped
+      if (error) throw error
+      const mapped: StockCodeCategory[] = (data || []).map((r: any) => ({
+        id: r.id,
+        categoryName: r.category_name,
+        categoryCode: r.category_code,
+        description: r.description || undefined,
+        isActive: r.is_active,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at
+      }))
+      return mapped
+    } catch (err) {
+      return []
+    }
   }
 
   async addStockCodeCategory(categoryName: string): Promise<StockCodeCategory> {
@@ -365,62 +416,80 @@ class StockService {
     while (letters.length < 2) letters.push('X')
     const categoryCode = letters.join('')
 
-    const { data, error } = await supabase
-      .from('stock_code_categories')
-      .insert({
-        category_name: categoryName,
-        category_code: categoryCode,
-        is_active: true
-      })
-      .select()
-      .single()
+    try {
+      const { data, error } = await supabase
+        .from('stock_code_categories')
+        .insert({
+          category_name: categoryName,
+          category_code: categoryCode,
+          is_active: true
+        })
+        .select()
+        .single()
 
-    if (error) throw error
-    return {
-      id: data.id,
-      categoryName: data.category_name,
-      categoryCode: data.category_code,
-      description: data.description || undefined,
-      isActive: data.is_active,
-      createdAt: data.created_at,
-      updatedAt: data.updated_at
+      if (error) throw error
+      return {
+        id: data.id,
+        categoryName: data.category_name,
+        categoryCode: data.category_code,
+        description: data.description || undefined,
+        isActive: data.is_active,
+        createdAt: data.created_at,
+        updatedAt: data.updated_at
+      }
+    } catch (e: any) {
+      const msg = handleSupabaseError(e, 'Kategori eklenemedi. Lütfen daha sonra tekrar deneyin.')
+      throw new Error(msg)
     }
   }
 
   async deleteStockCodeCategory(id: string): Promise<void> {
-    const { error } = await supabase
-      .from('stock_code_categories')
-      .delete()
-      .eq('id', id)
+    try {
+      const { error } = await supabase
+        .from('stock_code_categories')
+        .delete()
+        .eq('id', id)
 
-    if (error) throw error
+      if (error) throw error
+    } catch (e: any) {
+      const msg = handleSupabaseError(e, 'Kategori silinemedi. Lütfen daha sonra tekrar deneyin.')
+      throw new Error(msg)
+    }
   }
 
   // Suppliers
   async getStockSuppliers(): Promise<StockSupplier[]> {
-    const { data, error } = await supabase
-      .from('stock_suppliers')
-      .select('*')
-      .eq('is_active', true)
-      .order('name')
+    try {
+      const { data, error } = await supabase
+        .from('stock_suppliers')
+        .select('*')
+        .eq('is_active', true)
+        .order('name')
 
-    if (error) throw error
-    return data || []
+      if (error) throw error
+      return data || []
+    } catch (err) {
+      return []
+    }
   }
 
   // Alerts
   async getStockAlerts(resolved = false): Promise<StockAlert[]> {
-    const { data, error } = await supabase
-      .from('stock_alerts')
-      .select(`
-        *,
-        stock_items(stock_name, stock_code)
-      `)
-      .eq('is_resolved', resolved)
-      .order('created_at', { ascending: false })
+    try {
+      const { data, error } = await supabase
+        .from('stock_alerts')
+        .select(`
+          *,
+          stock_items(stock_name, stock_code)
+        `)
+        .eq('is_resolved', resolved)
+        .order('created_at', { ascending: false })
 
-    if (error) throw error
-    return data || []
+      if (error) throw error
+      return data || []
+    } catch (err) {
+      return []
+    }
   }
 
   async resolveAlert(alertId: string): Promise<void> {
@@ -439,60 +508,71 @@ class StockService {
   // Statistics
   async getStockStats(): Promise<StockStats> {
     // Total items and values
-    const { data: items, error: itemsError } = await supabase
-      .from('stock_items')
-      .select('current_amount, minimum_level, cost_per_unit, category')
+    try {
+      const { data: items, error: itemsError } = await supabase
+        .from('stock_items')
+        .select('current_amount, minimum_level, cost_per_unit, category')
 
-    if (itemsError) throw itemsError
+      if (itemsError) throw itemsError
 
-    const totalItems = items?.length || 0
-    const totalValue = items?.reduce((sum, item) => {
-      return sum + (item.current_amount * (item.cost_per_unit || 0))
-    }, 0) || 0
+      const totalItems = items?.length || 0
+      const totalValue = items?.reduce((sum, item) => {
+        return sum + (item.current_amount * (item.cost_per_unit || 0))
+      }, 0) || 0
 
-    const lowStockItems = items?.filter(item => 
-      item.current_amount <= item.minimum_level
-    ).length || 0
+      const lowStockItems = items?.filter(item => 
+        item.current_amount <= item.minimum_level
+      ).length || 0
 
-    const outOfStockItems = items?.filter(item => 
-      item.current_amount <= 0
-    ).length || 0
+      const outOfStockItems = items?.filter(item => 
+        item.current_amount <= 0
+      ).length || 0
 
-    // Recent movements (last 7 days)
-    const sevenDaysAgo = new Date()
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
+      // Recent movements (last 7 days)
+      const sevenDaysAgo = new Date()
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
 
-    const { data: movements, error: movementsError } = await supabase
-      .from('stock_movements')
-      .select('id')
-      .gte('created_at', sevenDaysAgo.toISOString())
+      const { data: movements, error: movementsError } = await supabase
+        .from('stock_movements')
+        .select('id')
+        .gte('created_at', sevenDaysAgo.toISOString())
 
-    if (movementsError) throw movementsError
+      if (movementsError) throw movementsError
 
-    // Category counts
-    const categoryCounts = items?.reduce((acc: any, item) => {
-      const category = item.category
-      if (!acc[category]) {
-        acc[category] = { count: 0, value: 0 }
+      // Category counts
+      const categoryCounts = items?.reduce((acc: any, item) => {
+        const category = item.category
+        if (!acc[category]) {
+          acc[category] = { count: 0, value: 0 }
+        }
+        acc[category].count += 1
+        acc[category].value += item.current_amount * (item.cost_per_unit || 0)
+        return acc
+      }, {}) || {}
+
+      const categoryCountsArray = Object.entries(categoryCounts).map(([category, data]: [string, any]) => ({
+        category,
+        count: data.count,
+        value: data.value
+      }))
+
+      return {
+        totalItems,
+        totalValue,
+        lowStockItems,
+        outOfStockItems,
+        recentMovements: movements?.length || 0,
+        categoryCounts: categoryCountsArray
       }
-      acc[category].count += 1
-      acc[category].value += item.current_amount * (item.cost_per_unit || 0)
-      return acc
-    }, {}) || {}
-
-    const categoryCountsArray = Object.entries(categoryCounts).map(([category, data]: [string, any]) => ({
-      category,
-      count: data.count,
-      value: data.value
-    }))
-
-    return {
-      totalItems,
-      totalValue,
-      lowStockItems,
-      outOfStockItems,
-      recentMovements: movements?.length || 0,
-      categoryCounts: categoryCountsArray
+    } catch (err) {
+      return {
+        totalItems: 0,
+        totalValue: 0,
+        lowStockItems: 0,
+        outOfStockItems: 0,
+        recentMovements: 0,
+        categoryCounts: []
+      }
     }
   }
 
@@ -523,7 +603,8 @@ class StockService {
           results.push({ stockItemId: data, stockCode: row.stockCode })
         }
       } catch (err: any) {
-        errors.push({ row, error: err.message })
+        const msg = handleSupabaseError(err, 'Satır içe aktarılırken hata oluştu')
+        errors.push({ row, error: msg })
       }
     }
 
@@ -532,14 +613,19 @@ class StockService {
 
   // Stock Code Generation
   async generateStockCode(category: string, productName: string): Promise<string> {
-    const { data, error } = await supabase
-      .rpc('generate_stock_code', {
-        p_category: category,
-        p_product_name: productName
-      })
+    try {
+      const { data, error } = await supabase
+        .rpc('generate_stock_code', {
+          p_category: category,
+          p_product_name: productName
+        })
 
-    if (error) throw error
-    return data
+      if (error) throw error
+      return data
+    } catch (e: any) {
+      const msg = handleSupabaseError(e, 'Kod üretilemedi')
+      throw new Error(msg)
+    }
   }
 
   async previewStockCode(category: string, productName: string): Promise<string> {
